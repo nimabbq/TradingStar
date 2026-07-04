@@ -11,6 +11,16 @@ from .alpha_vantage import (
     get_news as get_alpha_vantage_news,
     get_stock as get_alpha_vantage_stock,
 )
+from .akshare import (
+    get_balance_sheet as get_akshare_balance_sheet,
+    get_cashflow as get_akshare_cashflow,
+    get_fundamentals as get_akshare_fundamentals,
+    get_income_statement as get_akshare_income_statement,
+    get_indicator as get_akshare_indicator,
+    get_news as get_akshare_news,
+    get_stock as get_akshare_stock,
+)
+from .a_share_rules import is_a_share_symbol
 from .config import get_config
 from .errors import (
     NoMarketDataError,
@@ -29,6 +39,7 @@ from .y_finance import (
     get_YFin_data_online,
 )
 from .yfinance_news import get_global_news_yfinance, get_news_yfinance
+from tradingagents.default_config import DEFAULT_CONFIG
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +89,7 @@ TOOLS_CATEGORIES = {
 }
 
 VENDOR_LIST = [
+    "akshare",
     "yfinance",
     "fred",
     "polymarket",
@@ -95,33 +107,40 @@ OPTIONAL_CATEGORIES = {"macro_data", "prediction_markets"}
 VENDOR_METHODS = {
     # core_stock_apis
     "get_stock_data": {
+        "akshare": get_akshare_stock,
         "alpha_vantage": get_alpha_vantage_stock,
         "yfinance": get_YFin_data_online,
     },
     # technical_indicators
     "get_indicators": {
+        "akshare": get_akshare_indicator,
         "alpha_vantage": get_alpha_vantage_indicator,
         "yfinance": get_stock_stats_indicators_window,
     },
     # fundamental_data
     "get_fundamentals": {
+        "akshare": get_akshare_fundamentals,
         "alpha_vantage": get_alpha_vantage_fundamentals,
         "yfinance": get_yfinance_fundamentals,
     },
     "get_balance_sheet": {
+        "akshare": get_akshare_balance_sheet,
         "alpha_vantage": get_alpha_vantage_balance_sheet,
         "yfinance": get_yfinance_balance_sheet,
     },
     "get_cashflow": {
+        "akshare": get_akshare_cashflow,
         "alpha_vantage": get_alpha_vantage_cashflow,
         "yfinance": get_yfinance_cashflow,
     },
     "get_income_statement": {
+        "akshare": get_akshare_income_statement,
         "alpha_vantage": get_alpha_vantage_income_statement,
         "yfinance": get_yfinance_income_statement,
     },
     # news_data
     "get_news": {
+        "akshare": get_akshare_news,
         "alpha_vantage": get_alpha_vantage_news,
         "yfinance": get_news_yfinance,
     },
@@ -141,6 +160,16 @@ VENDOR_METHODS = {
     "get_prediction_markets": {
         "polymarket": get_polymarket_prediction_markets,
     },
+}
+
+_A_SHARE_ROUTED_METHODS = {
+    "get_stock_data",
+    "get_indicators",
+    "get_fundamentals",
+    "get_balance_sheet",
+    "get_cashflow",
+    "get_income_statement",
+    "get_news",
 }
 
 def get_category_for_method(method: str) -> str:
@@ -165,10 +194,40 @@ def get_vendor(category: str, method: str = None) -> str:
     # Fall back to category-level configuration
     return config.get("data_vendors", {}).get(category, "default")
 
+
+def _extract_symbol(method: str, args: tuple, kwargs: dict) -> str | None:
+    if method not in _A_SHARE_ROUTED_METHODS:
+        return None
+    for key in ("symbol", "ticker"):
+        value = kwargs.get(key)
+        if value:
+            return value
+    return args[0] if args else None
+
+
+def _should_use_a_share_vendor_config(
+    config: dict,
+    category: str,
+    method: str,
+    args: tuple,
+    kwargs: dict,
+) -> bool:
+    if method in config.get("tool_vendors", {}):
+        return False
+    symbol = _extract_symbol(method, args, kwargs)
+    if not symbol or not is_a_share_symbol(symbol):
+        return False
+    configured = config.get("data_vendors", {}).get(category, "default")
+    default = DEFAULT_CONFIG.get("data_vendors", {}).get(category, "default")
+    return configured == default
+
 def route_to_vendor(method: str, *args, **kwargs):
     """Route method calls to appropriate vendor implementation with fallback support."""
     category = get_category_for_method(method)
+    config = get_config()
     vendor_config = get_vendor(category, method)
+    if _should_use_a_share_vendor_config(config, category, method, args, kwargs):
+        vendor_config = config.get("a_share_data_vendors", {}).get(category, vendor_config)
     primary_vendors = [v.strip() for v in vendor_config.split(',')]
 
     if method not in VENDOR_METHODS:

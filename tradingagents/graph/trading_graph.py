@@ -12,6 +12,9 @@ from langgraph.prebuilt import ToolNode
 
 # Import the abstract tool methods from agent_utils
 from tradingagents.agents.utils.agent_utils import (
+    FUNDAMENTALS_A_SHARE_TOOLS,
+    MARKET_A_SHARE_TOOLS,
+    NEWS_A_SHARE_TOOLS,
     build_instrument_context,
     get_balance_sheet,
     get_cashflow,
@@ -171,6 +174,7 @@ class TradingAgentsGraph:
                     # LLM and required by its prompt; must be executable here or
                     # the call fails and the model reports it "unavailable").
                     get_verified_market_snapshot,
+                    *MARKET_A_SHARE_TOOLS,
                 ]
             ),
             "social": ToolNode(
@@ -187,6 +191,7 @@ class TradingAgentsGraph:
                     get_insider_transactions,
                     get_macro_indicators,
                     get_prediction_markets,
+                    *NEWS_A_SHARE_TOOLS,
                 ]
             ),
             "fundamentals": ToolNode(
@@ -196,6 +201,7 @@ class TradingAgentsGraph:
                     get_balance_sheet,
                     get_cashflow,
                     get_income_statement,
+                    *FUNDAMENTALS_A_SHARE_TOOLS,
                 ]
             ),
         }

@@ -1,0 +1,113 @@
+import sys
+
+import pandas as pd
+import pytest
+
+from tradingagents.agents.utils.a_share_tools import (
+    get_a_share_dragon_tiger,
+    get_a_share_limit_pool,
+    get_a_share_shareholder_count,
+    get_a_share_tools_for_analyst,
+)
+
+
+class FakeAkShareSpecialty:
+    def stock_lhb_stock_detail_em(self, symbol, start_date, end_date):
+        self.dragon_tiger_call = {
+            "symbol": symbol,
+            "start_date": start_date,
+            "end_date": end_date,
+        }
+        return pd.DataFrame(
+            [
+                {
+                    "\u4ee3\u7801": symbol,
+                    "\u540d\u79f0": "\u8d35\u5dde\u8305\u53f0",
+                    "\u4e0a\u699c\u65e5\u671f": "2026-01-05",
+                    "\u4e70\u5165\u989d": 1000,
+                }
+            ]
+        )
+
+    def stock_zt_pool_em(self, date):
+        self.limit_pool_call = {"date": date}
+        return pd.DataFrame(
+            [
+                {
+                    "\u4ee3\u7801": "600519",
+                    "\u540d\u79f0": "\u8d35\u5dde\u8305\u53f0",
+                    "\u6da8\u505c\u539f\u56e0": "\u6d88\u8d39",
+                }
+            ]
+        )
+
+    def stock_zh_a_gdhs_detail_em(self, symbol):
+        self.shareholder_call = {"symbol": symbol}
+        return pd.DataFrame(
+            [
+                {
+                    "\u80a1\u4e1c\u6237\u6570": 120000,
+                    "\u622a\u6b62\u65e5\u671f": "2025-12-31",
+                }
+            ]
+        )
+
+
+@pytest.fixture()
+def fake_akshare(monkeypatch):
+    fake = FakeAkShareSpecialty()
+    monkeypatch.setitem(sys.modules, "akshare", fake)
+    return fake
+
+
+@pytest.mark.unit
+def test_a_share_tool_bundles_only_for_a_shares():
+    market_names = [tool.name for tool in get_a_share_tools_for_analyst("market", "600519")]
+    news_names = [tool.name for tool in get_a_share_tools_for_analyst("news", "600519.SS")]
+    fundamentals_names = [
+        tool.name for tool in get_a_share_tools_for_analyst("fundamentals", "300750")
+    ]
+
+    assert "get_a_share_limit_pool" in market_names
+    assert "get_a_share_dragon_tiger" in news_names
+    assert "get_a_share_shareholder_count" in fundamentals_names
+    assert get_a_share_tools_for_analyst("market", "AAPL") == []
+
+
+@pytest.mark.unit
+def test_dragon_tiger_tool_formats_fake_akshare(fake_akshare):
+    result = get_a_share_dragon_tiger.func("600519", "2026-01-01", "2026-01-10")
+
+    assert fake_akshare.dragon_tiger_call == {
+        "symbol": "600519",
+        "start_date": "20260101",
+        "end_date": "20260110",
+    }
+    assert "# A-share dragon tiger data for 600519.SS" in result
+    assert "\u8d35\u5dde\u8305\u53f0" in result
+
+
+@pytest.mark.unit
+def test_limit_pool_filters_to_ticker(fake_akshare):
+    result = get_a_share_limit_pool.func("600519", "2026-01-05")
+
+    assert fake_akshare.limit_pool_call == {"date": "20260105"}
+    assert "# A-share limit-up/limit-down pool data for 600519.SS" in result
+    assert "\u6da8\u505c\u539f\u56e0" in result
+
+
+@pytest.mark.unit
+def test_shareholder_tool_formats_fake_akshare(fake_akshare):
+    result = get_a_share_shareholder_count.func("600519", "2026-01-05")
+
+    assert fake_akshare.shareholder_call == {"symbol": "600519"}
+    assert "# A-share shareholder count data for 600519.SS" in result
+    assert "\u80a1\u4e1c\u6237\u6570" in result
+
+
+@pytest.mark.unit
+def test_specialty_tool_rejects_non_a_share(fake_akshare):
+    result = get_a_share_dragon_tiger.func("AAPL", "2026-01-01", "2026-01-10")
+
+    assert result.startswith("DATA_UNAVAILABLE")
+    assert not hasattr(fake_akshare, "dragon_tiger_call")

@@ -118,9 +118,13 @@ def normalize_symbol(raw: str) -> str:
     # Broker CFD/qualifier suffixes Yahoo never uses.
     s = s.rstrip("+")
 
+    from .a_share_rules import is_a_share_symbol, normalize_a_share_symbol
+
     crypto = _normalize_crypto(s)
     if s in _ALIASES:
         canonical = _ALIASES[s]
+    elif is_a_share_symbol(s):
+        canonical = normalize_a_share_symbol(s)
     elif crypto is not None:
         canonical = crypto
     elif len(s) == 6 and s[:3] in _FOREX_CURRENCIES and s[3:] in _FOREX_CURRENCIES:

@@ -12,6 +12,17 @@ _CUSTOM_ONLY: dict[str, list[ModelOption]] = {
     "deep": [("Custom model ID", "custom")],
 }
 
+_CODEX_MODELS: dict[str, list[ModelOption]] = {
+    "quick": [
+        ("Codex CLI default", "codex"),
+        ("Custom model ID", "custom"),
+    ],
+    "deep": [
+        ("Codex CLI default", "codex"),
+        ("Custom model ID", "custom"),
+    ],
+}
+
 
 # Shared model list for GLM via Z.AI (international) and BigModel (China).
 # Source: docs.z.ai (GLM Coding Plan supported models + LLM guides).
@@ -188,6 +199,9 @@ MODEL_OPTIONS: ProviderModeOptions = {
     "nvidia": _CUSTOM_ONLY,
     # Bedrock model IDs / cross-region inference profile IDs are user-specified.
     "bedrock": _CUSTOM_ONLY,
+    # Codex CLI uses the user's local Codex configuration by default. A custom
+    # model ID is forwarded to `codex exec -m`.
+    "codex": _CODEX_MODELS,
 }
 
 

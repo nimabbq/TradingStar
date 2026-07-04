@@ -1,6 +1,7 @@
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 from tradingagents.agents.utils.agent_utils import (
+    get_a_share_tools_for_analyst,
     get_indicators,
     get_instrument_context_from_state,
     get_language_instruction,
@@ -13,6 +14,7 @@ def create_market_analyst(llm):
 
     def market_analyst_node(state):
         current_date = state["trade_date"]
+        ticker = state["company_of_interest"]
         instrument_context = get_instrument_context_from_state(state)
 
         tools = [
@@ -20,6 +22,15 @@ def create_market_analyst(llm):
             get_indicators,
             get_verified_market_snapshot,
         ]
+        a_share_tools = get_a_share_tools_for_analyst("market", ticker)
+        tools += a_share_tools
+        a_share_guidance = (
+            " For mainland China A-shares, also use the A-share specialty tools "
+            "to check limit-up/limit-down executability, margin financing, and "
+            "fund-flow context before making price-action claims."
+            if a_share_tools
+            else ""
+        )
 
         system_message = (
             """You are a trading assistant tasked with analyzing financial markets. Your role is to select the **most relevant indicators** for a given market condition or trading strategy from the following list. The goal is to choose up to **8 indicators** that provide complementary insights without redundancy. Categories and each category's indicators are:
@@ -51,6 +62,7 @@ Volume-Based Indicators:
 Before writing the final report, call get_verified_market_snapshot for this ticker and the current date, and treat it as the source of truth for any exact OHLCV, price-level, or indicator-value claim. If another tool's output conflicts with the verified snapshot, flag the discrepancy rather than inventing a reconciled number. Do not claim historical validation, support/resistance bounces, or exact percentage moves unless they are directly supported by tool output with concrete dates and prices.
 
 Write a very detailed and nuanced report of the trends you observe. Provide specific, actionable insights with supporting evidence to help traders make informed decisions."""
+            + a_share_guidance
             + """ Make sure to append a Markdown table at the end of the report to organize key points in the report, organized and easy to read."""
             + get_language_instruction()
         )

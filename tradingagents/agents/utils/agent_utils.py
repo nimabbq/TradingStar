@@ -7,6 +7,21 @@ import yfinance as yf
 from langchain_core.messages import HumanMessage, RemoveMessage
 
 # Import tools from separate utility files
+from tradingagents.agents.utils.a_share_tools import (
+    FUNDAMENTALS_A_SHARE_TOOLS,
+    MARKET_A_SHARE_TOOLS,
+    NEWS_A_SHARE_TOOLS,
+    get_a_share_dividend_allotment,
+    get_a_share_dragon_tiger,
+    get_a_share_institutional_holdings,
+    get_a_share_limit_pool,
+    get_a_share_lockup_expiry,
+    get_a_share_margin_financing,
+    get_a_share_northbound_flow,
+    get_a_share_sector_fund_flow,
+    get_a_share_shareholder_count,
+    get_a_share_tools_for_analyst,
+)
 from tradingagents.agents.utils.core_stock_tools import get_stock_data
 from tradingagents.agents.utils.fundamental_data_tools import (
     get_balance_sheet,
@@ -39,6 +54,19 @@ __all__ = [
     "get_macro_indicators",
     "get_prediction_markets",
     "get_verified_market_snapshot",
+    "get_a_share_dragon_tiger",
+    "get_a_share_northbound_flow",
+    "get_a_share_margin_financing",
+    "get_a_share_limit_pool",
+    "get_a_share_sector_fund_flow",
+    "get_a_share_shareholder_count",
+    "get_a_share_institutional_holdings",
+    "get_a_share_lockup_expiry",
+    "get_a_share_dividend_allotment",
+    "MARKET_A_SHARE_TOOLS",
+    "NEWS_A_SHARE_TOOLS",
+    "FUNDAMENTALS_A_SHARE_TOOLS",
+    "get_a_share_tools_for_analyst",
     "build_instrument_context",
     "resolve_instrument_identity",
     "get_instrument_context_from_state",
@@ -166,6 +194,17 @@ def build_instrument_context(
             " Treat it as a crypto asset rather than a company, and do not "
             "assume company fundamentals are available."
         )
+
+    try:
+        from tradingagents.dataflows.a_share_rules import (
+            build_a_share_rule_context,
+            is_a_share_symbol,
+        )
+
+        if not is_crypto and is_a_share_symbol(ticker):
+            context += " " + build_a_share_rule_context(ticker, identity=identity)
+    except Exception as exc:  # noqa: BLE001 - rule context should never block analysis
+        logger.debug("Could not build A-share rule context for %s: %s", ticker, exc)
     return context
 
 

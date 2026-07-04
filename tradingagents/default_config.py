@@ -126,12 +126,21 @@ DEFAULT_CONFIG = _apply_env_overrides({
     # routed to vendors you didn't choose. For ordered fallback, list several,
     # e.g. "yfinance,alpha_vantage". "default" uses all available vendors.
     "data_vendors": {
-        "core_stock_apis": "yfinance",       # Options: alpha_vantage, yfinance
-        "technical_indicators": "yfinance",  # Options: alpha_vantage, yfinance
-        "fundamental_data": "yfinance",      # Options: alpha_vantage, yfinance
-        "news_data": "yfinance",             # Options: alpha_vantage, yfinance
+        "core_stock_apis": "yfinance",       # Options: akshare, alpha_vantage, yfinance
+        "technical_indicators": "yfinance",  # Options: akshare, alpha_vantage, yfinance
+        "fundamental_data": "yfinance",      # Options: akshare, alpha_vantage, yfinance
+        "news_data": "yfinance",             # Options: akshare, alpha_vantage, yfinance
         "macro_data": "fred",                # Options: fred (needs FRED_API_KEY)
         "prediction_markets": "polymarket",  # Options: polymarket (keyless)
+    },
+    # When a ticker is detected as a mainland China A-share and the normal
+    # category vendor is still at its default, prefer AkShare before falling
+    # back to the global vendors.
+    "a_share_data_vendors": {
+        "core_stock_apis": "akshare,yfinance",
+        "technical_indicators": "akshare,yfinance",
+        "fundamental_data": "akshare,yfinance",
+        "news_data": "akshare,yfinance",
     },
     # Tool-level configuration (takes precedence over category-level)
     "tool_vendors": {
