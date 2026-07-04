@@ -196,6 +196,17 @@ def build_instrument_context(
         )
 
     try:
+        from tradingagents.dataflows.china_fund_rules import (
+            build_china_fund_rule_context,
+            is_china_fund_symbol,
+        )
+
+        if not is_crypto and is_china_fund_symbol(ticker):
+            context += " " + build_china_fund_rule_context(ticker, identity=identity)
+    except Exception as exc:  # noqa: BLE001 - rule context should never block analysis
+        logger.debug("Could not build China fund context for %s: %s", ticker, exc)
+
+    try:
         from tradingagents.dataflows.a_share_rules import (
             build_a_share_rule_context,
             is_a_share_symbol,

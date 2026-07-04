@@ -142,6 +142,14 @@ DEFAULT_CONFIG = _apply_env_overrides({
         "fundamental_data": "akshare,yfinance",
         "news_data": "akshare,yfinance",
     },
+    # China off-exchange mutual funds (e.g. 005827 / 005827.FUND) use
+    # AkShare's fund endpoints and should not be treated as listed stocks.
+    "china_fund_data_vendors": {
+        "core_stock_apis": "akshare_fund",
+        "technical_indicators": "akshare_fund",
+        "fundamental_data": "akshare_fund",
+        "news_data": "akshare_fund",
+    },
     # Tool-level configuration (takes precedence over category-level)
     "tool_vendors": {
         # Example: "get_stock_data": "alpha_vantage",  # Override category default

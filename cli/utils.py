@@ -11,7 +11,7 @@ from tradingagents.llm_clients.model_catalog import get_model_options
 
 console = Console()
 
-TICKER_INPUT_EXAMPLES = "SPY, 0700.HK, BTC-USD"
+TICKER_INPUT_EXAMPLES = "SPY, 0700.HK, BTC-USD, 005827"
 
 ANALYST_ORDER = [
     ("Market Analyst", AnalystType.MARKET),
@@ -31,7 +31,7 @@ def is_valid_ticker_input(value: str) -> bool:
     allowed (it defaults to SPY downstream).
     """
     v = value.strip()
-    return not v or (all(ch.isalnum() or ch in "._-^=" for ch in v) and len(v) <= 32)
+    return not v or (all(ch.isalnum() or ch in "._-^=:" for ch in v) and len(v) <= 32)
 
 
 def get_ticker() -> str:
@@ -82,6 +82,13 @@ def detect_asset_type(ticker: str) -> AssetType:
     """Classify on the canonical symbol so e.g. BTCUSD and BTC-USDT both read as
     crypto (#981/#982), matching what the data path will actually fetch."""
     canonical = normalize_ticker_symbol(ticker)
+    try:
+        from tradingagents.dataflows.china_fund_rules import is_china_fund_symbol
+
+        if is_china_fund_symbol(canonical):
+            return AssetType.FUND
+    except Exception:
+        pass
     if canonical.endswith(CRYPTO_SUFFIXES):
         return AssetType.CRYPTO
     return AssetType.STOCK
