@@ -8,6 +8,7 @@ import yfinance as yf
 from stockstats import wrap
 from yfinance.exceptions import YFRateLimitError
 
+from .china_fund_rules import is_china_fund_symbol
 from .config import get_config
 from .symbol_utils import NoMarketDataError, normalize_symbol
 from .utils import safe_ticker_component
@@ -142,6 +143,16 @@ def load_ohlcv(symbol: str, curr_date: str) -> pd.DataFrame:
     today_date = pd.Timestamp.today()
     start_date = today_date - pd.DateOffset(years=5)
     start_str = start_date.strftime("%Y-%m-%d")
+
+    if is_china_fund_symbol(canonical):
+        from .akshare_fund import get_ohlcv_frame as get_china_fund_ohlcv_frame
+
+        data = get_china_fund_ohlcv_frame(canonical, start_str, curr_date)
+        data = _clean_dataframe(data)
+        data = data[data["Date"] <= curr_date_dt]
+        _assert_ohlcv_not_stale(data, curr_date, symbol, canonical)
+        return data
+
     # yfinance ``end`` is EXCLUSIVE; request tomorrow so today's row is included
     # when curr_date is the current day (#986). Look-ahead is still prevented by
     # the curr_date filter below.

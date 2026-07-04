@@ -6,6 +6,7 @@ import pandas as pd
 import pytest
 
 import tradingagents.dataflows.market_data_validator as validator
+import tradingagents.dataflows.stockstats_utils as stockstats_utils
 
 
 def _sample_ohlcv() -> pd.DataFrame:
@@ -61,6 +62,49 @@ class TestVerifiedSnapshot:
         # last-N closes table has at most 30 data rows
         close_rows = [ln for ln in snap.splitlines() if ln.startswith("| 2026-")]
         assert 0 < len(close_rows) <= 30
+
+    def test_china_fund_snapshot_uses_akshare_nav_not_yahoo(self, monkeypatch, tmp_path):
+        class FakeAkShare:
+            def fund_open_fund_info_em(self, symbol, indicator, period):
+                self.nav_call = {"symbol": symbol, "indicator": indicator, "period": period}
+                return pd.DataFrame(
+                    [
+                        {
+                            "\u51c0\u503c\u65e5\u671f": "2026-06-25",
+                            "\u5355\u4f4d\u51c0\u503c": 1.234,
+                            "\u65e5\u589e\u957f\u7387": 0.12,
+                        },
+                        {
+                            "\u51c0\u503c\u65e5\u671f": "2026-06-30",
+                            "\u5355\u4f4d\u51c0\u503c": 1.256,
+                            "\u65e5\u589e\u957f\u7387": 1.78,
+                        },
+                    ]
+                )
+
+        fake = FakeAkShare()
+
+        def fail_yahoo(*args, **kwargs):
+            raise AssertionError("fund snapshots must not call Yahoo Finance")
+
+        monkeypatch.setitem(__import__("sys").modules, "akshare", fake)
+        monkeypatch.setattr(stockstats_utils.yf, "download", fail_yahoo)
+        monkeypatch.setattr(
+            stockstats_utils,
+            "get_config",
+            lambda: {"data_cache_dir": str(tmp_path)},
+        )
+
+        snap = validator.build_verified_market_snapshot("005064.FUND", "2026-07-04")
+
+        assert fake.nav_call == {
+            "symbol": "005064",
+            "indicator": "\u5355\u4f4d\u51c0\u503c\u8d70\u52bf",
+            "period": "\u5168\u90e8",
+        }
+        assert "Verified market data snapshot for 005064.FUND" in snap
+        assert "Latest trading row used: 2026-06-30" in snap
+        assert "| Close | 1.26 |" in snap
 
 
 @pytest.mark.unit

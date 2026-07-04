@@ -95,6 +95,16 @@ def _fund_nav_frame(
     return canonical, frame
 
 
+def get_ohlcv_frame(
+    symbol: str,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> pd.DataFrame:
+    """Return China mutual fund NAV rows as an OHLCV-shaped frame."""
+    _, frame = _fund_nav_frame(symbol, start_date, end_date)
+    return frame[["Date", "Open", "High", "Low", "Close", "Volume"]].copy()
+
+
 def get_stock(
     symbol: Annotated[str, "China mutual fund code, e.g. 005827 or 005827.FUND"],
     start_date: Annotated[str, "Start date in yyyy-mm-dd format"],
