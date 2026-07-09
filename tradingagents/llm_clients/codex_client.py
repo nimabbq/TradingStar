@@ -163,6 +163,26 @@ def _message_from_tool_protocol(text: str) -> AIMessage:
     return AIMessage(content="", tool_calls=tool_calls)
 
 
+def _fallback_empty_codex_output(completed: subprocess.CompletedProcess) -> str:
+    stdout = (completed.stdout or "").strip()
+    if stdout:
+        return stdout
+
+    stderr = (completed.stderr or "").strip()
+    if stderr:
+        return (
+            "Codex CLI completed successfully but did not write a final message.\n\n"
+            "CLI diagnostics:\n"
+            f"{stderr}"
+        )
+
+    return (
+        "Codex CLI completed successfully but did not write a final message. "
+        "Proceed with the available conversation and tool outputs, and report "
+        "that the model response was unavailable instead of fabricating analysis."
+    )
+
+
 class CodexCLIChatModel(BaseChatModel):
     """LangChain chat wrapper that delegates each call to ``codex exec``."""
 
@@ -296,7 +316,7 @@ class CodexCLIChatModel(BaseChatModel):
                 f"{completed.returncode}: {completed.stderr or completed.stdout}"
             )
         if not output.strip():
-            raise RuntimeError("Codex CLI completed without writing a last message")
+            return _fallback_empty_codex_output(completed)
         return output.strip()
 
     def _make_output_path(self) -> str:

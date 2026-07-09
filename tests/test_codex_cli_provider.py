@@ -81,6 +81,42 @@ def test_non_default_model_is_forwarded_to_codex_exec(monkeypatch, tmp_path):
 
 
 @pytest.mark.unit
+def test_empty_last_message_uses_stdout_fallback(monkeypatch, tmp_path):
+    from tradingagents.llm_clients.codex_client import CodexCLIChatModel
+
+    def fake_run(cmd, **kwargs):
+        output_path = cmd[cmd.index("-o") + 1]
+        with open(output_path, "w", encoding="utf-8") as f:
+            f.write("")
+        return subprocess.CompletedProcess(cmd, 0, stdout="stdout answer", stderr="")
+
+    monkeypatch.setattr("tradingagents.llm_clients.codex_client.subprocess.run", fake_run)
+
+    llm = CodexCLIChatModel(model="codex", codex_path=str(tmp_path / "codex.exe"))
+
+    assert llm.invoke("hello").content == "stdout answer"
+
+
+@pytest.mark.unit
+def test_empty_last_message_returns_diagnostic_instead_of_crashing(monkeypatch, tmp_path):
+    from tradingagents.llm_clients.codex_client import CodexCLIChatModel
+
+    def fake_run(cmd, **kwargs):
+        output_path = cmd[cmd.index("-o") + 1]
+        with open(output_path, "w", encoding="utf-8") as f:
+            f.write("")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("tradingagents.llm_clients.codex_client.subprocess.run", fake_run)
+
+    llm = CodexCLIChatModel(model="codex", codex_path=str(tmp_path / "codex.exe"))
+
+    result = llm.invoke("hello")
+
+    assert "Codex CLI completed successfully but did not write a final message" in result.content
+
+
+@pytest.mark.unit
 def test_bound_tools_parse_codex_tool_call_json(monkeypatch, tmp_path):
     from tradingagents.llm_clients.codex_client import CodexCLIChatModel
 
