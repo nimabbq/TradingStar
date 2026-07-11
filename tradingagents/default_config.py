@@ -150,6 +150,15 @@ DEFAULT_CONFIG = _apply_env_overrides({
         "fundamental_data": "akshare_fund",
         "news_data": "akshare_fund",
     },
+    # Mainland exchange-traded funds use AkShare for price, indicators, and
+    # fund-level metrics. News remains on the normal news chain because the
+    # ETF adapter does not pretend company news is fund disclosure.
+    "china_etf_data_vendors": {
+        "core_stock_apis": "akshare_etf,yfinance",
+        "technical_indicators": "akshare_etf,yfinance",
+        "fundamental_data": "akshare_etf",
+        "news_data": "yfinance",
+    },
     # Tool-level configuration (takes precedence over category-level)
     "tool_vendors": {
         # Example: "get_stock_data": "alpha_vantage",  # Override category default

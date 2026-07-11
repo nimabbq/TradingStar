@@ -119,6 +119,7 @@ def normalize_symbol(raw: str) -> str:
     s = s.rstrip("+")
 
     from .a_share_rules import is_a_share_symbol, normalize_a_share_symbol
+    from .china_etf_rules import is_china_etf_symbol, normalize_china_etf_symbol
     from .china_fund_rules import is_china_fund_symbol, normalize_china_fund_symbol
 
     crypto = _normalize_crypto(s)
@@ -126,6 +127,8 @@ def normalize_symbol(raw: str) -> str:
         canonical = _ALIASES[s]
     elif is_china_fund_symbol(s):
         canonical = normalize_china_fund_symbol(s)
+    elif is_china_etf_symbol(s):
+        canonical = normalize_china_etf_symbol(s)
     elif is_a_share_symbol(s):
         canonical = normalize_a_share_symbol(s)
     elif crypto is not None:

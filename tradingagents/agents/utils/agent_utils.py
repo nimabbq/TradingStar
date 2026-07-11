@@ -11,6 +11,7 @@ from tradingagents.agents.utils.a_share_tools import (
     FUNDAMENTALS_A_SHARE_TOOLS,
     MARKET_A_SHARE_TOOLS,
     NEWS_A_SHARE_TOOLS,
+    get_a_share_announcements,
     get_a_share_dividend_allotment,
     get_a_share_dragon_tiger,
     get_a_share_institutional_holdings,
@@ -20,6 +21,7 @@ from tradingagents.agents.utils.a_share_tools import (
     get_a_share_northbound_flow,
     get_a_share_sector_fund_flow,
     get_a_share_shareholder_count,
+    get_a_share_trade_status,
     get_a_share_tools_for_analyst,
 )
 from tradingagents.agents.utils.core_stock_tools import get_stock_data
@@ -55,6 +57,8 @@ __all__ = [
     "get_prediction_markets",
     "get_verified_market_snapshot",
     "get_a_share_dragon_tiger",
+    "get_a_share_announcements",
+    "get_a_share_trade_status",
     "get_a_share_northbound_flow",
     "get_a_share_margin_financing",
     "get_a_share_limit_pool",
@@ -205,6 +209,17 @@ def build_instrument_context(
             context += " " + build_china_fund_rule_context(ticker, identity=identity)
     except Exception as exc:  # noqa: BLE001 - rule context should never block analysis
         logger.debug("Could not build China fund context for %s: %s", ticker, exc)
+
+    try:
+        from tradingagents.dataflows.china_etf_rules import (
+            build_china_etf_rule_context,
+            is_china_etf_symbol,
+        )
+
+        if not is_crypto and is_china_etf_symbol(ticker):
+            context += " " + build_china_etf_rule_context(ticker, identity=identity)
+    except Exception as exc:  # noqa: BLE001 - rule context should never block analysis
+        logger.debug("Could not build China ETF context for %s: %s", ticker, exc)
 
     try:
         from tradingagents.dataflows.a_share_rules import (

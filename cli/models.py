@@ -14,3 +14,4 @@ class AssetType(str, Enum):
     STOCK = "stock"
     CRYPTO = "crypto"
     FUND = "fund"
+    ETF = "etf"

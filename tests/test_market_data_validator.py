@@ -106,6 +106,37 @@ class TestVerifiedSnapshot:
         assert "Latest trading row used: 2026-06-30" in snap
         assert "| Close | 1.26 |" in snap
 
+    def test_a_share_snapshot_uses_qfq_akshare_not_yahoo(self, monkeypatch):
+        from tradingagents.dataflows import akshare as avendor
+
+        calls = []
+        frame = pd.DataFrame(
+            {
+                "Date": pd.to_datetime(["2026-07-02", "2026-07-03"]),
+                "Open": [10.0, 10.2],
+                "High": [10.3, 10.5],
+                "Low": [9.9, 10.1],
+                "Close": [10.2, 10.4],
+                "Volume": [1000, 1200],
+            }
+        )
+
+        def fake_ohlcv(symbol, start_date, end_date, *, adjust):
+            calls.append((symbol, adjust))
+            return frame
+
+        monkeypatch.setattr(avendor, "get_ohlcv_frame", fake_ohlcv)
+        monkeypatch.setattr(
+            stockstats_utils.yf,
+            "download",
+            lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("Yahoo must not be used")),
+        )
+
+        snap = validator.build_verified_market_snapshot("600519", "2026-07-03")
+
+        assert calls == [("600519.SS", "qfq")]
+        assert "Price basis: forward-adjusted (qfq)" in snap
+
 
 @pytest.mark.unit
 class TestTool:

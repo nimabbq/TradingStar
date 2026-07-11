@@ -4,9 +4,11 @@ import pandas as pd
 import pytest
 
 from tradingagents.agents.utils.a_share_tools import (
+    get_a_share_announcements,
     get_a_share_dragon_tiger,
     get_a_share_limit_pool,
     get_a_share_shareholder_count,
+    get_a_share_trade_status,
     get_a_share_tools_for_analyst,
 )
 
@@ -50,6 +52,17 @@ class FakeAkShareSpecialty:
                     "\u622a\u6b62\u65e5\u671f": "2025-12-31",
                 }
             ]
+        )
+
+    def stock_individual_notice_report(self, security, symbol, begin_date, end_date):
+        self.notice_call = {
+            "security": security,
+            "symbol": symbol,
+            "begin_date": begin_date,
+            "end_date": end_date,
+        }
+        return pd.DataFrame(
+            [{"代码": security, "公告日期": "2026-01-04", "公告标题": "年度业绩预告"}]
         )
 
 
@@ -111,3 +124,67 @@ def test_specialty_tool_rejects_non_a_share(fake_akshare):
 
     assert result.startswith("DATA_UNAVAILABLE")
     assert not hasattr(fake_akshare, "dragon_tiger_call")
+
+
+@pytest.mark.unit
+def test_limit_pool_continues_after_first_pool_has_other_ticker(monkeypatch):
+    class Pools:
+        def stock_zt_pool_em(self, date):
+            return pd.DataFrame([{"代码": "000001", "名称": "平安银行"}])
+
+        def stock_zt_pool_dtgc_em(self, date):
+            return pd.DataFrame([{"代码": "600519", "名称": "贵州茅台", "状态": "跌停"}])
+
+    monkeypatch.setitem(sys.modules, "akshare", Pools())
+
+    result = get_a_share_limit_pool.func("600519", "2026-01-05")
+
+    assert "贵州茅台" in result
+    assert "stock_zt_pool_dtgc_em" in result
+
+
+@pytest.mark.unit
+def test_official_announcements_are_ticker_and_date_filtered(fake_akshare):
+    result = get_a_share_announcements.func("600519", "2026-01-01", "2026-01-05")
+
+    assert fake_akshare.notice_call == {
+        "security": "600519",
+        "symbol": "全部",
+        "begin_date": "20260101",
+        "end_date": "20260105",
+    }
+    assert "年度业绩预告" in result
+    assert "Scope: ticker" in result
+
+
+@pytest.mark.unit
+def test_market_bundle_includes_deterministic_trade_status():
+    names = [tool.name for tool in get_a_share_tools_for_analyst("market", "600519")]
+    assert get_a_share_trade_status.name in names
+
+
+@pytest.mark.unit
+def test_trade_status_uses_raw_reference_price_and_board_lot(monkeypatch):
+    from tradingagents.agents.utils import a_share_tools
+
+    raw = pd.DataFrame(
+        {
+            "Date": pd.to_datetime(["2026-01-02", "2026-01-05"]),
+            "Open": [99.0, 101.0],
+            "High": [101.0, 106.0],
+            "Low": [98.0, 100.0],
+            "Close": [100.0, 105.0],
+            "Volume": [1000, 1200],
+        }
+    )
+    monkeypatch.setattr(
+        a_share_tools,
+        "_stock_history_frame",
+        lambda *args, **kwargs: ("600519.SS", raw),
+    )
+
+    result = get_a_share_trade_status.func("600519", "2026-01-05")
+
+    assert "Daily-limit reference close (unadjusted): 100.0" in result
+    assert "Estimated upper/lower limit: 110.00 / 90.00" in result
+    assert "Minimum buy lot: 100 shares" in result

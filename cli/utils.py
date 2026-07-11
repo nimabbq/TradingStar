@@ -89,6 +89,13 @@ def detect_asset_type(ticker: str) -> AssetType:
             return AssetType.FUND
     except Exception:
         pass
+    try:
+        from tradingagents.dataflows.china_etf_rules import is_china_etf_symbol
+
+        if is_china_etf_symbol(canonical):
+            return AssetType.ETF
+    except Exception:
+        pass
     if canonical.endswith(CRYPTO_SUFFIXES):
         return AssetType.CRYPTO
     return AssetType.STOCK

@@ -116,7 +116,13 @@ def _call_endpoint(endpoint, **kwargs):
         return endpoint(**kwargs)
 
 
-def _stock_history_frame(symbol: str, start_date: str, end_date: str) -> tuple[str, pd.DataFrame]:
+def _stock_history_frame(
+    symbol: str,
+    start_date: str,
+    end_date: str,
+    *,
+    adjust: str = "",
+) -> tuple[str, pd.DataFrame]:
     canonical, code = _canonical_and_code(symbol)
     ak = _akshare()
     start_yyyymmdd = _yyyymmdd(start_date)
@@ -128,7 +134,7 @@ def _stock_history_frame(symbol: str, start_date: str, end_date: str) -> tuple[s
             symbol=market_symbol,
             start_date=start_yyyymmdd,
             end_date=end_yyyymmdd,
-            adjust="",
+            adjust=adjust,
             timeout=10,
         )
 
@@ -137,7 +143,7 @@ def _stock_history_frame(symbol: str, start_date: str, end_date: str) -> tuple[s
             symbol=market_symbol,
             start_date=start_yyyymmdd,
             end_date=end_yyyymmdd,
-            adjust="",
+            adjust=adjust,
         )
 
     def eastmoney_hist():
@@ -147,7 +153,7 @@ def _stock_history_frame(symbol: str, start_date: str, end_date: str) -> tuple[s
                 period="daily",
                 start_date=start_yyyymmdd,
                 end_date=end_yyyymmdd,
-                adjust="",
+                adjust=adjust,
                 timeout=10,
             )
         except TypeError:
@@ -156,7 +162,7 @@ def _stock_history_frame(symbol: str, start_date: str, end_date: str) -> tuple[s
                 period="daily",
                 start_date=start_yyyymmdd,
                 end_date=end_yyyymmdd,
-                adjust="",
+                adjust=adjust,
             )
 
     last_error: Exception | None = None
@@ -213,7 +219,27 @@ def get_stock(
     end_date: Annotated[str, "End date in yyyy-mm-dd format"],
 ) -> str:
     canonical, frame = _stock_history_frame(symbol, start_date, end_date)
-    return _format_frame(f"# AkShare stock data for {canonical} from {start_date} to {end_date}", frame)
+    return _format_frame(
+        f"# AkShare stock data for {canonical} from {start_date} to {end_date}\n"
+        "# Price basis: unadjusted (execution and daily-limit reference)",
+        frame,
+    )
+
+
+def get_ohlcv_frame(
+    symbol: str,
+    start_date: str,
+    end_date: str,
+    *,
+    adjust: str = "qfq",
+) -> pd.DataFrame:
+    """Return an OHLCV frame with an explicit AkShare adjustment basis."""
+    _, frame = _stock_history_frame(symbol, start_date, end_date, adjust=adjust)
+    required = ["Date", "Open", "High", "Low", "Close", "Volume"]
+    for column in required:
+        if column not in frame.columns:
+            frame[column] = 0.0 if column == "Volume" else pd.NA
+    return frame[required].copy()
 
 
 def get_indicator(
@@ -229,7 +255,12 @@ def get_indicator(
 
     end_dt = datetime.strptime(curr_date, "%Y-%m-%d")
     start_dt = end_dt - relativedelta(days=max(int(look_back_days) + 260, 365))
-    canonical, frame = _stock_history_frame(symbol, start_dt.strftime("%Y-%m-%d"), curr_date)
+    canonical, frame = _stock_history_frame(
+        symbol,
+        start_dt.strftime("%Y-%m-%d"),
+        curr_date,
+        adjust="qfq",
+    )
     stats_frame = frame.rename(columns=str.lower)
     stats_frame = stats_frame.rename(columns={"date": "Date"})
     stats_frame["Date"] = pd.to_datetime(stats_frame["Date"], errors="coerce")
@@ -258,6 +289,7 @@ def get_indicator(
         + "\n".join(values)
         + "\n\n"
         + _SUPPORTED_INDICATORS[indicator]
+        + "\n\nPrice basis: forward-adjusted (qfq); do not use these values as executable limit prices."
     )
 
 
@@ -342,16 +374,45 @@ def _start_year_for_financial_indicator(curr_date: str | None) -> str:
     return str(max(1900, int(parsed.year) - 3))
 
 
+def _conservative_report_visibility(value) -> pd.Timestamp:
+    """Return the latest statutory publication window for an A-share period."""
+    period = pd.to_datetime(value, errors="coerce")
+    if pd.isna(period):
+        return period
+    deadlines = {
+        (3, 31): pd.Timestamp(period.year, 4, 30),
+        (6, 30): pd.Timestamp(period.year, 8, 31),
+        (9, 30): pd.Timestamp(period.year, 10, 31),
+        (12, 31): pd.Timestamp(period.year + 1, 4, 30),
+    }
+    return deadlines.get((period.month, period.day), period)
+
+
 def _filter_frame_by_date(frame: pd.DataFrame, curr_date: str | None) -> pd.DataFrame:
     if not curr_date or frame.empty:
         return frame
     cutoff = pd.to_datetime(curr_date, errors="coerce")
     if pd.isna(cutoff):
         return frame
-    for column in ("\u62a5\u544a\u671f", "\u516c\u544a\u65e5\u671f", "\u65e5\u671f"):
+    publication_columns = (
+        "\u516c\u544a\u65e5\u671f",
+        "\u516c\u544a\u65f6\u95f4",
+        "\u53d1\u5e03\u65f6\u95f4",
+        "\u62ab\u9732\u65e5\u671f",
+        "NOTICE_DATE",
+        "ANNOUNCEMENT_DATE",
+        "PUBLISH_DATE",
+        "UPDATE_DATE",
+    )
+    for column in publication_columns:
         if column in frame.columns:
             dates = pd.to_datetime(frame[column], errors="coerce")
-            return frame[dates.isna() | (dates <= cutoff)]
+            return frame[dates.notna() & (dates <= cutoff)]
+    for column in ("\u62a5\u544a\u671f", "\u65e5\u671f", "REPORT_DATE"):
+        if column in frame.columns:
+            dates = pd.to_datetime(frame[column], errors="coerce")
+            visibility = dates.map(_conservative_report_visibility)
+            return frame[visibility.isna() | (visibility <= cutoff)]
     keep_columns = []
     saw_period_column = False
     for column in frame.columns:
@@ -360,7 +421,7 @@ def _filter_frame_by_date(frame: pd.DataFrame, curr_date: str | None) -> pd.Data
             keep_columns.append(column)
             continue
         saw_period_column = True
-        if parsed <= cutoff:
+        if _conservative_report_visibility(parsed) <= cutoff:
             keep_columns.append(column)
     if saw_period_column:
         return frame.loc[:, keep_columns]

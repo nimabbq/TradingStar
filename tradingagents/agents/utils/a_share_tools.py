@@ -1,16 +1,19 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+from datetime import timedelta
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Annotated
 
 import pandas as pd
 from langchain_core.tools import tool
 
-from tradingagents.dataflows.a_share_rules import is_a_share_symbol
+from tradingagents.dataflows.a_share_rules import AShareBoard, classify_a_share_board, is_a_share_symbol
 from tradingagents.dataflows.akshare import (
     _akshare,
     _canonical_and_code,
-    _em_symbol,
     _format_frame,
+    _stock_history_frame,
     _yyyymmdd,
 )
 from tradingagents.dataflows.errors import NoMarketDataError, VendorNotConfiguredError
@@ -44,7 +47,18 @@ def _as_frame(data) -> pd.DataFrame:
     return frame.copy()
 
 
-def _call_first_available(candidates: list[tuple[str, list[dict]]], detail: str) -> pd.DataFrame:
+_MARKET_AGGREGATE_ENDPOINTS = {
+    "stock_hsgt_hist_em",
+    "stock_hsgt_north_net_flow_in_em",
+    "stock_sector_fund_flow_rank",
+}
+
+
+def _call_first_available(
+    candidates: list[tuple[str, list[dict]]],
+    detail: str,
+    transform: Callable[[pd.DataFrame], pd.DataFrame] | None = None,
+) -> tuple[pd.DataFrame, str]:
     ak = _akshare()
     saw_endpoint = False
     last_error: Exception | None = None
@@ -57,11 +71,13 @@ def _call_first_available(candidates: list[tuple[str, list[dict]]], detail: str)
         for kwargs in kwargs_options:
             try:
                 frame = _as_frame(endpoint(**kwargs))
-            except TypeError as exc:
+            except Exception as exc:  # noqa: BLE001 - try the next documented endpoint shape
                 last_error = exc
                 continue
+            if transform is not None and not frame.empty:
+                frame = transform(frame)
             if not frame.empty:
-                return frame
+                return frame, endpoint_name
 
     if not saw_endpoint:
         names = ", ".join(name for name, _ in candidates)
@@ -118,13 +134,22 @@ def _run_specialty_tool(
         return f"DATA_UNAVAILABLE: {ticker} is not a supported A-share symbol."
     try:
         canonical, code = _canonical_and_code(ticker)
-        frame = _call_first_available(candidates, f"no {title} data")
-        if filter_code:
-            frame = _filter_by_code(frame, code)
-        frame = _filter_by_date_range(frame, start_date, end_date)
-        if frame.empty:
-            raise NoMarketDataError(ticker, canonical, f"no {title} rows after filtering")
-        return _format_frame(f"# A-share {title} data for {canonical}", frame)
+        def prepare(candidate: pd.DataFrame) -> pd.DataFrame:
+            if filter_code:
+                candidate = _filter_by_code(candidate, code)
+            return _filter_by_date_range(candidate, start_date, end_date)
+
+        frame, endpoint_name = _call_first_available(
+            candidates,
+            f"no {title} data",
+            transform=prepare,
+        )
+        scope = "market aggregate context" if endpoint_name in _MARKET_AGGREGATE_ENDPOINTS else "ticker"
+        return _format_frame(
+            f"# A-share {title} data for {canonical}\n"
+            f"# Source endpoint: {endpoint_name}\n# Scope: {scope}",
+            frame,
+        )
     except VendorNotConfiguredError as exc:
         return f"DATA_UNAVAILABLE: {exc}"
     except NoMarketDataError as exc:
@@ -160,6 +185,48 @@ def get_a_share_dragon_tiger(
                 ],
             ),
             ("stock_lhb_stock_statistic_em", [{"symbol": code}, {"symbol": canonical}]),
+        ],
+        start_date=start_date,
+        end_date=end_date,
+    )
+
+
+@tool
+def get_a_share_announcements(
+    ticker: Annotated[str, "A-share ticker symbol, e.g. 600519"],
+    start_date: Annotated[str, "Start date in yyyy-mm-dd format"],
+    end_date: Annotated[str, "End date in yyyy-mm-dd format"],
+) -> str:
+    """Retrieve official A-share disclosures for point-in-time event analysis."""
+    code = _canonical_and_code(ticker)[1] if is_a_share_symbol(ticker) else ticker
+    return _run_specialty_tool(
+        ticker,
+        "official announcements",
+        [
+            (
+                "stock_individual_notice_report",
+                [
+                    {
+                        "security": code,
+                        "symbol": "\u5168\u90e8",
+                        "begin_date": _yyyymmdd(start_date),
+                        "end_date": _yyyymmdd(end_date),
+                    }
+                ],
+            ),
+            (
+                "stock_zh_a_disclosure_report_cninfo",
+                [
+                    {
+                        "symbol": code,
+                        "market": "\u6caa\u6df1\u4eac",
+                        "keyword": "",
+                        "category": "",
+                        "start_date": _yyyymmdd(start_date),
+                        "end_date": _yyyymmdd(end_date),
+                    }
+                ],
+            ),
         ],
         start_date=start_date,
         end_date=end_date,
@@ -356,12 +423,146 @@ def get_a_share_dividend_allotment(
     )
 
 
+def _profile_values(frame: pd.DataFrame) -> dict[str, str]:
+    for key_column, value_column in (
+        ("item", "value"),
+        ("\u9879\u76ee", "\u503c"),
+    ):
+        if key_column in frame.columns and value_column in frame.columns:
+            return {
+                str(row[key_column]).strip(): str(row[value_column]).strip()
+                for _, row in frame.iterrows()
+            }
+    return {}
+
+
+def _round_price(value: float) -> str:
+    return str(Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+
+
+@tool
+def get_a_share_trade_status(
+    ticker: Annotated[str, "A-share ticker symbol, e.g. 600519"],
+    curr_date: Annotated[str, "Analysis date in yyyy-mm-dd format"],
+) -> str:
+    """Build a dated A-share executability snapshot from raw prices and status lists."""
+    if not is_a_share_symbol(ticker):
+        return f"DATA_UNAVAILABLE: {ticker} is not a supported A-share symbol."
+    canonical, code = _canonical_and_code(ticker)
+    board = classify_a_share_board(ticker)
+    ak = _akshare()
+    analysis_date = pd.to_datetime(curr_date, errors="coerce")
+    if pd.isna(analysis_date):
+        return f"DATA_UNAVAILABLE: invalid analysis date {curr_date!r}."
+
+    try:
+        _, history = _stock_history_frame(
+            ticker,
+            (analysis_date - timedelta(days=45)).strftime("%Y-%m-%d"),
+            curr_date,
+            adjust="",
+        )
+        history = history.copy()
+        history["Date"] = pd.to_datetime(history["Date"], errors="coerce")
+        history = history.dropna(subset=["Date", "Close"]).sort_values("Date")
+    except Exception as exc:  # noqa: BLE001
+        return f"DATA_UNAVAILABLE: could not build raw-price trade status for {canonical} ({exc})."
+    if history.empty:
+        return f"NO_DATA_AVAILABLE: no raw price rows for {canonical} on or before {curr_date}."
+
+    latest = history.iloc[-1]
+    latest_date = latest["Date"].strftime("%Y-%m-%d")
+    if latest["Date"].normalize() == analysis_date.normalize() and len(history) > 1:
+        limit_reference = float(history.iloc[-2]["Close"])
+    else:
+        limit_reference = float(latest["Close"])
+
+    profile = {}
+    endpoint = getattr(ak, "stock_individual_info_em", None)
+    if endpoint is not None:
+        try:
+            profile = _profile_values(_as_frame(endpoint(symbol=code)))
+        except Exception:
+            profile = {}
+    name = profile.get("\u80a1\u7968\u7b80\u79f0") or profile.get("\u7b80\u79f0") or "unknown"
+    listing_raw = profile.get("\u4e0a\u5e02\u65f6\u95f4") or profile.get("\u4e0a\u5e02\u65e5\u671f")
+    listing_date = pd.to_datetime(listing_raw, errors="coerce")
+
+    st_status = "unknown"
+    st_endpoint = getattr(ak, "stock_zh_a_st_em", None)
+    if st_endpoint is not None and analysis_date.normalize() == pd.Timestamp.today().normalize():
+        try:
+            st_status = "yes" if not _filter_by_code(_as_frame(st_endpoint()), code).empty else "no"
+        except Exception:
+            pass
+
+    suspension = "unknown"
+    suspension_endpoint = getattr(ak, "stock_tfp_em", None)
+    if suspension_endpoint is not None:
+        try:
+            suspension = (
+                "yes"
+                if not _filter_by_code(_as_frame(suspension_endpoint(date=_yyyymmdd(curr_date))), code).empty
+                else "no"
+            )
+        except Exception:
+            pass
+
+    first_five = "unknown"
+    calendar_endpoint = getattr(ak, "tool_trade_date_hist_sina", None)
+    if calendar_endpoint is not None and not pd.isna(listing_date):
+        try:
+            calendar = _as_frame(calendar_endpoint())
+            date_column = next((c for c in ("trade_date", "\u4ea4\u6613\u65e5\u671f", "date") if c in calendar.columns), None)
+            if date_column:
+                dates = pd.to_datetime(calendar[date_column], errors="coerce")
+                count = int(((dates >= listing_date) & (dates <= analysis_date)).sum())
+                first_five = "yes" if count <= 5 else "no"
+        except Exception:
+            pass
+
+    lot_size = 200 if board is AShareBoard.STAR else 100
+    limit_pct = 0.05 if st_status == "yes" else {
+        AShareBoard.SH_MAIN: 0.10,
+        AShareBoard.SZ_MAIN: 0.10,
+        AShareBoard.STAR: 0.20,
+        AShareBoard.CHINEXT: 0.20,
+        AShareBoard.BSE: 0.30,
+    }[board]
+    if first_five == "yes":
+        upper = lower = "not applicable during initial no-limit window"
+    else:
+        upper = _round_price(limit_reference * (1 + limit_pct))
+        lower = _round_price(limit_reference * (1 - limit_pct))
+
+    listing_text = "unknown" if pd.isna(listing_date) else listing_date.strftime("%Y-%m-%d")
+    return "\n".join(
+        [
+            f"## A-share executable trade status for {canonical}",
+            f"- Analysis date: {curr_date}",
+            f"- Name: {name}",
+            f"- Board: {board.value}",
+            f"- Latest raw-price row: {latest_date}; close={latest['Close']}",
+            f"- Daily-limit reference close (unadjusted): {limit_reference}",
+            f"- Estimated upper/lower limit: {upper} / {lower}",
+            f"- ST status: {st_status}",
+            f"- Suspended on analysis date: {suspension}",
+            f"- Listing date: {listing_text}; within first five trading days: {first_five}",
+            f"- Minimum buy lot: {lot_size} shares",
+            "- Stock settlement constraint: T+1; shares bought today cannot be sold today.",
+            "- Status fields marked unknown must not be guessed. Limit prices are estimates until verified against the exchange feed.",
+        ]
+    )
+
+
 MARKET_A_SHARE_TOOLS = [
+    get_a_share_trade_status,
     get_a_share_limit_pool,
     get_a_share_sector_fund_flow,
     get_a_share_margin_financing,
 ]
 NEWS_A_SHARE_TOOLS = [
+    get_a_share_announcements,
     get_a_share_dragon_tiger,
     get_a_share_northbound_flow,
     get_a_share_margin_financing,
@@ -387,6 +588,8 @@ def get_a_share_tools_for_analyst(analyst: str, ticker: str):
 
 
 ALL_A_SHARE_TOOLS = [
+    get_a_share_trade_status,
+    get_a_share_announcements,
     get_a_share_dragon_tiger,
     get_a_share_northbound_flow,
     get_a_share_margin_financing,
@@ -405,6 +608,8 @@ __all__ = [
     "FUNDAMENTALS_A_SHARE_TOOLS",
     "get_a_share_tools_for_analyst",
     "get_a_share_dragon_tiger",
+    "get_a_share_announcements",
+    "get_a_share_trade_status",
     "get_a_share_northbound_flow",
     "get_a_share_margin_financing",
     "get_a_share_limit_pool",

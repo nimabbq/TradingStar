@@ -8,7 +8,9 @@ import yfinance as yf
 from stockstats import wrap
 from yfinance.exceptions import YFRateLimitError
 
+from .a_share_rules import is_a_share_symbol
 from .china_fund_rules import is_china_fund_symbol
+from .china_etf_rules import is_china_etf_symbol
 from .config import get_config
 from .symbol_utils import NoMarketDataError, normalize_symbol
 from .utils import safe_ticker_component
@@ -151,6 +153,27 @@ def load_ohlcv(symbol: str, curr_date: str) -> pd.DataFrame:
         data = _clean_dataframe(data)
         data = data[data["Date"] <= curr_date_dt]
         _assert_ohlcv_not_stale(data, curr_date, symbol, canonical)
+        return data
+
+    if is_china_etf_symbol(canonical):
+        from .akshare_etf import get_ohlcv_frame as get_china_etf_ohlcv_frame
+
+        data = get_china_etf_ohlcv_frame(canonical, start_str, curr_date, adjust="qfq")
+        price_basis = data.attrs.get("price_basis", "forward-adjusted ETF price (qfq)")
+        data = _clean_dataframe(data)
+        data = data[data["Date"] <= curr_date_dt]
+        _assert_ohlcv_not_stale(data, curr_date, symbol, canonical)
+        data.attrs["price_basis"] = price_basis
+        return data
+
+    if is_a_share_symbol(canonical):
+        from .akshare import get_ohlcv_frame as get_a_share_ohlcv_frame
+
+        data = get_a_share_ohlcv_frame(canonical, start_str, curr_date, adjust="qfq")
+        data = _clean_dataframe(data)
+        data = data[data["Date"] <= curr_date_dt]
+        _assert_ohlcv_not_stale(data, curr_date, symbol, canonical)
+        data.attrs["price_basis"] = "forward-adjusted (qfq)"
         return data
 
     # yfinance ``end`` is EXCLUSIVE; request tomorrow so today's row is included

@@ -27,8 +27,15 @@ from .akshare_fund import (
     get_statement_not_applicable as get_akshare_fund_statement_not_applicable,
     get_stock as get_akshare_fund_stock,
 )
+from .akshare_etf import (
+    get_fundamentals as get_akshare_etf_fundamentals,
+    get_indicator as get_akshare_etf_indicator,
+    get_statement_not_applicable as get_akshare_etf_statement_not_applicable,
+    get_stock as get_akshare_etf_stock,
+)
 from .a_share_rules import is_a_share_symbol
 from .china_fund_rules import is_china_fund_symbol
+from .china_etf_rules import is_china_etf_symbol
 from .config import get_config
 from .errors import (
     NoMarketDataError,
@@ -97,6 +104,7 @@ TOOLS_CATEGORIES = {
 }
 
 VENDOR_LIST = [
+    "akshare_etf",
     "akshare_fund",
     "akshare",
     "yfinance",
@@ -116,6 +124,7 @@ OPTIONAL_CATEGORIES = {"macro_data", "prediction_markets"}
 VENDOR_METHODS = {
     # core_stock_apis
     "get_stock_data": {
+        "akshare_etf": get_akshare_etf_stock,
         "akshare_fund": get_akshare_fund_stock,
         "akshare": get_akshare_stock,
         "alpha_vantage": get_alpha_vantage_stock,
@@ -123,6 +132,7 @@ VENDOR_METHODS = {
     },
     # technical_indicators
     "get_indicators": {
+        "akshare_etf": get_akshare_etf_indicator,
         "akshare_fund": get_akshare_fund_indicator,
         "akshare": get_akshare_indicator,
         "alpha_vantage": get_alpha_vantage_indicator,
@@ -130,24 +140,28 @@ VENDOR_METHODS = {
     },
     # fundamental_data
     "get_fundamentals": {
+        "akshare_etf": get_akshare_etf_fundamentals,
         "akshare_fund": get_akshare_fund_fundamentals,
         "akshare": get_akshare_fundamentals,
         "alpha_vantage": get_alpha_vantage_fundamentals,
         "yfinance": get_yfinance_fundamentals,
     },
     "get_balance_sheet": {
+        "akshare_etf": get_akshare_etf_statement_not_applicable,
         "akshare_fund": get_akshare_fund_statement_not_applicable,
         "akshare": get_akshare_balance_sheet,
         "alpha_vantage": get_alpha_vantage_balance_sheet,
         "yfinance": get_yfinance_balance_sheet,
     },
     "get_cashflow": {
+        "akshare_etf": get_akshare_etf_statement_not_applicable,
         "akshare_fund": get_akshare_fund_statement_not_applicable,
         "akshare": get_akshare_cashflow,
         "alpha_vantage": get_alpha_vantage_cashflow,
         "yfinance": get_yfinance_cashflow,
     },
     "get_income_statement": {
+        "akshare_etf": get_akshare_etf_statement_not_applicable,
         "akshare_fund": get_akshare_fund_statement_not_applicable,
         "akshare": get_akshare_income_statement,
         "alpha_vantage": get_alpha_vantage_income_statement,
@@ -189,6 +203,8 @@ _A_SHARE_ROUTED_METHODS = {
 }
 
 _CHINA_FUND_ROUTED_METHODS = set(_A_SHARE_ROUTED_METHODS)
+_CHINA_ETF_ROUTED_METHODS = _A_SHARE_ROUTED_METHODS - {"get_news"}
+
 
 def get_category_for_method(method: str) -> str:
     """Get the category that contains the specified method."""
@@ -214,7 +230,7 @@ def get_vendor(category: str, method: str = None) -> str:
 
 
 def _extract_symbol(method: str, args: tuple, kwargs: dict) -> str | None:
-    if method not in (_A_SHARE_ROUTED_METHODS | _CHINA_FUND_ROUTED_METHODS):
+    if method not in (_A_SHARE_ROUTED_METHODS | _CHINA_FUND_ROUTED_METHODS | _CHINA_ETF_ROUTED_METHODS):
         return None
     for key in ("symbol", "ticker"):
         value = kwargs.get(key)
@@ -256,6 +272,24 @@ def _should_use_china_fund_vendor_config(
     default = DEFAULT_CONFIG.get("data_vendors", {}).get(category, "default")
     return configured == default
 
+
+def _should_use_china_etf_vendor_config(
+    config: dict,
+    category: str,
+    method: str,
+    args: tuple,
+    kwargs: dict,
+) -> bool:
+    if method not in _CHINA_ETF_ROUTED_METHODS or method in config.get("tool_vendors", {}):
+        return False
+    symbol = _extract_symbol(method, args, kwargs)
+    if not symbol or not is_china_etf_symbol(symbol):
+        return False
+    configured = config.get("data_vendors", {}).get(category, "default")
+    default = DEFAULT_CONFIG.get("data_vendors", {}).get(category, "default")
+    return configured == default
+
+
 def route_to_vendor(method: str, *args, **kwargs):
     """Route method calls to appropriate vendor implementation with fallback support."""
     category = get_category_for_method(method)
@@ -263,6 +297,8 @@ def route_to_vendor(method: str, *args, **kwargs):
     vendor_config = get_vendor(category, method)
     if _should_use_china_fund_vendor_config(config, category, method, args, kwargs):
         vendor_config = config.get("china_fund_data_vendors", {}).get(category, vendor_config)
+    elif _should_use_china_etf_vendor_config(config, category, method, args, kwargs):
+        vendor_config = config.get("china_etf_data_vendors", {}).get(category, vendor_config)
     elif _should_use_a_share_vendor_config(config, category, method, args, kwargs):
         vendor_config = config.get("a_share_data_vendors", {}).get(category, vendor_config)
     primary_vendors = [v.strip() for v in vendor_config.split(',')]

@@ -262,3 +262,67 @@ def test_news_format_fake_akshare(fake_akshare):
     assert "\u8d35\u5dde\u8305\u53f0\u53d1\u5e03\u516c\u544a" in result
     assert "\u4e1c\u65b9\u8d22\u5bcc" in result
     assert "https://example.com/news" in result
+
+
+@pytest.mark.unit
+def test_financial_filter_prefers_announcement_date_over_report_period():
+    from tradingagents.dataflows.akshare import _filter_frame_by_date
+
+    frame = pd.DataFrame(
+        [
+            {"报告期": "2025-12-31", "公告日期": "2026-03-20", "净利润": 100},
+            {"报告期": "2025-09-30", "公告日期": "2025-10-25", "净利润": 80},
+            {"报告期": "2025-06-30", "公告日期": None, "净利润": 60},
+        ]
+    )
+
+    filtered = _filter_frame_by_date(frame, "2026-01-10")
+
+    assert filtered["净利润"].tolist() == [80]
+
+
+@pytest.mark.unit
+def test_financial_filter_uses_conservative_deadline_without_publication_date():
+    from tradingagents.dataflows.akshare import _filter_frame_by_date
+
+    frame = pd.DataFrame(
+        [
+            {"报告期": "2025-12-31", "净利润": 100},
+            {"报告期": "2025-09-30", "净利润": 80},
+        ]
+    )
+
+    january = _filter_frame_by_date(frame, "2026-01-10")
+    may = _filter_frame_by_date(frame, "2026-05-01")
+
+    assert january["净利润"].tolist() == [80]
+    assert may["净利润"].tolist() == [100, 80]
+
+
+@pytest.mark.unit
+def test_a_share_indicators_request_forward_adjusted_prices(monkeypatch):
+    from tradingagents.dataflows import akshare as vendor
+
+    calls = []
+
+    def fake_history(symbol, start_date, end_date, *, adjust=""):
+        calls.append(adjust)
+        dates = pd.date_range("2025-01-01", periods=370, freq="D")
+        frame = pd.DataFrame(
+            {
+                "Date": dates.strftime("%Y-%m-%d"),
+                "Open": range(1, 371),
+                "High": range(2, 372),
+                "Low": range(1, 371),
+                "Close": range(2, 372),
+                "Volume": [1000] * 370,
+            }
+        )
+        return "600519.SS", frame
+
+    monkeypatch.setattr(vendor, "_stock_history_frame", fake_history)
+
+    result = vendor.get_indicator("600519", "close_10_ema", "2026-01-05", 3)
+
+    assert calls == ["qfq"]
+    assert "Price basis: forward-adjusted" in result
