@@ -18,6 +18,12 @@ _ENV_OVERRIDES = {
     "TRADINGAGENTS_CHECKPOINT_ENABLED":   "checkpoint_enabled",
     "TRADINGAGENTS_BENCHMARK_TICKER":     "benchmark_ticker",
     "TRADINGAGENTS_TEMPERATURE":          "temperature",
+    "TRADINGAGENTS_A_SHARE_ACCOUNT_CASH": "a_share_account_cash",
+    "TRADINGAGENTS_A_SHARE_AVAILABLE_SHARES": "a_share_available_shares",
+    "TRADINGAGENTS_A_SHARE_COMMISSION_RATE": "a_share_commission_rate",
+    "TRADINGAGENTS_A_SHARE_MIN_COMMISSION": "a_share_min_commission",
+    "TRADINGAGENTS_A_SHARE_TRANSFER_FEE_RATE": "a_share_transfer_fee_rate",
+    "TRADINGAGENTS_A_SHARE_STAMP_DUTY_RATE": "a_share_stamp_duty_rate",
     # Provider-specific reasoning/thinking knobs (None = each provider's own
     # default). Settable here for non-interactive runs; the CLI also offers an
     # interactive choice, which is skipped when the matching var is set.
@@ -95,6 +101,14 @@ DEFAULT_CONFIG = _apply_env_overrides({
     # variation on models that honor it; reasoning models largely ignore it
     # and no setting makes LLM output bit-identical across runs (see README).
     "temperature": None,
+    # Optional A-share account inputs for deterministic order sizing. Zero
+    # disables quantity generation so the system never invents account state.
+    "a_share_account_cash": 0.0,
+    "a_share_available_shares": 0,
+    "a_share_commission_rate": 0.0003,
+    "a_share_min_commission": 5.0,
+    "a_share_transfer_fee_rate": 0.00001,
+    "a_share_stamp_duty_rate": 0.0005,
     # Checkpoint/resume: when True, LangGraph saves state after each node
     # so a crashed run can resume from the last successful step.
     "checkpoint_enabled": False,
@@ -104,6 +118,7 @@ DEFAULT_CONFIG = _apply_env_overrides({
     # Debate and discussion settings
     "max_debate_rounds": 1,
     "max_risk_discuss_rounds": 1,
+    "reflection_horizons": [5, 20, 60],
     "max_recur_limit": 100,
     # News / data fetching parameters
     # Increase for longer lookback strategies or to broaden macro coverage;

@@ -665,6 +665,81 @@ class TestDeferredReflection:
         assert "+5.0%" in entries[0]["raw"]
         assert "+2.0%" in entries[0]["alpha"]
 
+    def test_a_share_resolves_only_after_all_multi_horizons_are_available(self, tmp_path):
+        log = make_log(tmp_path)
+        log.store_decision("600519", "2025-01-05", DECISION_BUY)
+        mock_graph = MagicMock(spec=TradingAgentsGraph)
+        mock_graph.memory_log = log
+        mock_graph.config = {"reflection_horizons": [5, 20, 60]}
+        mock_graph.reflector = MagicMock()
+        mock_graph._resolve_benchmark.return_value = "000300.SS"
+        mock_graph._fetch_returns.side_effect = [
+            (0.02, 0.01, 5),
+            (0.08, 0.03, 20),
+            (0.15, 0.06, 60),
+        ]
+        mock_graph.reflector.reflect_on_multi_horizon_decision.return_value = "All horizons confirmed."
+
+        TradingAgentsGraph._resolve_pending_entries(mock_graph, "600519")
+
+        assert log.get_pending_entries() == []
+        assert [call.kwargs["holding_days"] for call in mock_graph._fetch_returns.call_args_list] == [5, 20, 60]
+        entry = log.load_entries()[0]
+        assert entry["holding"] == "60d"
+        assert "- 5d | raw +2.0% | alpha +1.0%" in entry["reflection"]
+        assert "- 20d | raw +8.0% | alpha +3.0%" in entry["reflection"]
+        assert "- 60d | raw +15.0% | alpha +6.0%" in entry["reflection"]
+        assert entry["reflection"].endswith("All horizons confirmed.")
+
+    def test_a_share_stays_pending_when_long_horizon_is_unavailable(self, tmp_path):
+        log = make_log(tmp_path)
+        log.store_decision("600519", "2026-01-05", DECISION_BUY)
+        mock_graph = MagicMock(spec=TradingAgentsGraph)
+        mock_graph.memory_log = log
+        mock_graph.config = {"reflection_horizons": [5, 20, 60]}
+        mock_graph.reflector = MagicMock()
+        mock_graph._resolve_benchmark.return_value = "000300.SS"
+        mock_graph._fetch_returns.side_effect = [
+            (0.02, 0.01, 5),
+            (0.08, 0.03, 20),
+            (None, None, None),
+        ]
+
+        TradingAgentsGraph._resolve_pending_entries(mock_graph, "600519")
+
+        assert len(log.get_pending_entries()) == 1
+        mock_graph.reflector.reflect_on_multi_horizon_decision.assert_not_called()
+
+
+class TestPerformanceSummary:
+    def test_summary_reports_win_rate_and_average_alpha(self, tmp_path):
+        log = make_log(tmp_path)
+        _resolve_entry(log, "600519", "2025-01-01", DECISION_BUY, "Good")
+        log.store_decision("600519", "2025-02-01", DECISION_SELL)
+        log.update_with_outcome("600519", "2025-02-01", -0.03, -0.01, 20, "Good sell")
+
+        summary = log.get_performance_summary("600519")
+
+        assert "Resolved decisions: 2" in summary
+        assert "Directional win rate: 100.0%" in summary
+        assert "Average alpha: +0.5%" in summary
+
+    def test_summary_aggregates_structured_multi_horizon_outcomes(self, tmp_path):
+        log = make_log(tmp_path)
+        log.store_decision("600519", "2025-01-01", DECISION_BUY)
+        reflection = (
+            "MULTI_HORIZON_OUTCOMES:\n"
+            "- 5d | raw +2.0% | alpha +1.0%\n"
+            "- 20d | raw +8.0% | alpha +3.0%\n"
+            "- 60d | raw +15.0% | alpha +6.0%\n\nLESSON:\nGood call."
+        )
+        log.update_with_outcome("600519", "2025-01-01", 0.15, 0.06, 60, reflection)
+
+        summary = log.get_performance_summary("600519")
+
+        assert "5d horizon: n=1, win=100.0%, raw=+2.0%, alpha=+1.0%" in summary
+        assert "60d horizon: n=1, win=100.0%, raw=+15.0%, alpha=+6.0%" in summary
+
 
 # ---------------------------------------------------------------------------
 # Portfolio Manager injection: past_context in state and prompt
@@ -726,6 +801,25 @@ class TestPortfolioManagerInjection:
         assert "**Investment Thesis**: AI capex cycle" in md
         assert "**Price Target**: 215.0" in md
         assert "**Time Horizon**: 3-6 months" in md
+
+    def test_pm_appends_deterministic_a_share_execution_envelope(self, monkeypatch):
+        from tradingagents.agents.managers import portfolio_manager
+
+        captured = {}
+        llm = _structured_pm_llm(captured)
+        state = _make_pm_state()
+        state["company_of_interest"] = "600519"
+        state["trade_date"] = "2026-01-05"
+        monkeypatch.setattr(
+            portfolio_manager,
+            "build_a_share_execution_plan",
+            lambda ticker, date, rating, config: "## deterministic execution",
+        )
+        monkeypatch.setattr(portfolio_manager, "get_config", lambda: {})
+
+        result = create_portfolio_manager(llm)(state)
+
+        assert result["final_trade_decision"].endswith("## deterministic execution")
 
     def test_pm_falls_back_to_freetext_when_structured_unavailable(self):
         """If a provider does not support with_structured_output, the agent

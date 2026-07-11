@@ -55,3 +55,32 @@ class Reflector:
             ),
         ]
         return self.quick_thinking_llm.invoke(messages).content
+
+    def reflect_on_multi_horizon_decision(
+        self,
+        final_decision: str,
+        outcomes: dict[int, tuple[float, float]],
+        benchmark_name: str,
+    ) -> str:
+        """Reflect once after every configured A-share horizon is observable."""
+        lines = []
+        for horizon in sorted(outcomes):
+            raw_return, alpha_return = outcomes[horizon]
+            lines.append(
+                f"{horizon} trading days: raw {raw_return:+.1%}; "
+                f"alpha vs {benchmark_name} {alpha_return:+.1%}"
+            )
+        messages = [
+            (
+                "system",
+                "Review this A-share decision across multiple horizons. Write 3-5 concise "
+                "sentences: directional accuracy by horizon, which thesis held or failed, "
+                "whether timing or stock selection drove the result, and one reusable lesson. "
+                "Do not invent evidence beyond the supplied returns and decision.",
+            ),
+            (
+                "human",
+                "\n".join(lines) + f"\n\nFinal Decision:\n{final_decision}",
+            ),
+        ]
+        return self.quick_thinking_llm.invoke(messages).content

@@ -86,6 +86,9 @@ class TradingMemoryLog:
             return ""
 
         parts = []
+        summary = self.get_performance_summary(ticker)
+        if summary:
+            parts.append(summary)
         if same:
             parts.append(f"Past analyses of {ticker} (most recent first):")
             parts.extend(self._format_full(e) for e in same)
@@ -93,6 +96,67 @@ class TradingMemoryLog:
             parts.append("Recent cross-ticker lessons:")
             parts.extend(self._format_reflection_only(e) for e in cross)
         return "\n\n".join(parts)
+
+    def get_performance_summary(self, ticker: str | None = None) -> str:
+        """Summarize resolved directional decisions without another LLM call."""
+        entries = [entry for entry in self.load_entries() if not entry.get("pending")]
+        if ticker is not None:
+            entries = [entry for entry in entries if entry.get("ticker") == ticker]
+        parsed = []
+        for entry in entries:
+            try:
+                raw = float(str(entry.get("raw", "")).rstrip("%")) / 100
+                alpha = float(str(entry.get("alpha", "")).rstrip("%")) / 100
+            except (TypeError, ValueError):
+                continue
+            parsed.append((entry, raw, alpha))
+        if not parsed:
+            return ""
+        directional = []
+        for entry, raw, _ in parsed:
+            rating = str(entry.get("rating", "")).lower()
+            if rating in {"buy", "overweight"}:
+                directional.append(raw > 0)
+            elif rating in {"sell", "underweight"}:
+                directional.append(raw < 0)
+        win_rate = sum(directional) / len(directional) if directional else 0.0
+        average_raw = sum(raw for _, raw, _ in parsed) / len(parsed)
+        average_alpha = sum(alpha for _, _, alpha in parsed) / len(parsed)
+        label = f" for {ticker}" if ticker else ""
+        lines = [
+            f"Historical decision performance{label}:",
+            f"- Resolved decisions: {len(parsed)}",
+            f"- Directional win rate: {win_rate:.1%}",
+            f"- Average raw return: {average_raw:+.1%}",
+            f"- Average alpha: {average_alpha:+.1%}",
+        ]
+        horizon_pattern = re.compile(
+            r"-\s*(\d+)d\s*\|\s*raw\s*([+-]?[\d.]+)%\s*\|\s*alpha\s*([+-]?[\d.]+)%"
+        )
+        horizon_results: dict[int, list[tuple[dict, float, float]]] = {}
+        for entry, _, _ in parsed:
+            for match in horizon_pattern.finditer(entry.get("reflection", "")):
+                horizon = int(match.group(1))
+                horizon_results.setdefault(horizon, []).append(
+                    (entry, float(match.group(2)) / 100, float(match.group(3)) / 100)
+                )
+        for horizon in sorted(horizon_results):
+            results = horizon_results[horizon]
+            horizon_wins = []
+            for entry, raw, _ in results:
+                rating = str(entry.get("rating", "")).lower()
+                if rating in {"buy", "overweight"}:
+                    horizon_wins.append(raw > 0)
+                elif rating in {"sell", "underweight"}:
+                    horizon_wins.append(raw < 0)
+            horizon_win_rate = sum(horizon_wins) / len(horizon_wins) if horizon_wins else 0.0
+            horizon_raw = sum(raw for _, raw, _ in results) / len(results)
+            horizon_alpha = sum(alpha for _, _, alpha in results) / len(results)
+            lines.append(
+                f"- {horizon}d horizon: n={len(results)}, win={horizon_win_rate:.1%}, "
+                f"raw={horizon_raw:+.1%}, alpha={horizon_alpha:+.1%}"
+            )
+        return "\n".join(lines)
 
     # --- Update path (Phase B) ---
 

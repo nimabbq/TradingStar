@@ -5,13 +5,16 @@ the old version had a prompt that demanded social-media analysis but the
 only tool available was Yahoo Finance news — which led LLMs to fabricate
 Reddit/X/StockTwits content under prompt pressure (verified live).
 
-The redesigned agent pre-fetches three complementary data sources before
-the LLM is invoked and injects them into the prompt as structured blocks:
+The redesigned agent pre-fetches market-appropriate sources before the LLM is
+invoked and injects them into the prompt as structured blocks:
 
   1. News headlines     — Yahoo Finance (institutional framing)
   2. StockTwits messages — retail-trader posts indexed by cashtag, with
                            user-labeled Bullish/Bearish sentiment tags
   3. Reddit posts        — r/wallstreetbets, r/stocks, r/investing
+
+For mainland A-shares, StockTwits and Reddit are replaced by deterministic
+local breadth, limit-pool, broken-board, and popularity data.
 
 The agent does not use tool-calling; the data is in the prompt from
 turn 0. Output uses the structured-output pattern (json_schema for
@@ -39,6 +42,8 @@ from tradingagents.agents.utils.structured import (
     bind_structured,
     invoke_structured_or_freetext,
 )
+from tradingagents.dataflows.a_share_rules import is_a_share_symbol
+from tradingagents.dataflows.a_share_sentiment import build_a_share_sentiment_snapshot
 from tradingagents.dataflows.reddit import fetch_reddit_posts
 from tradingagents.dataflows.stocktwits import fetch_stocktwits_messages
 
@@ -50,8 +55,8 @@ def _seven_days_back(trade_date: str) -> str:
 def create_sentiment_analyst(llm):
     """Create a sentiment analyst node for the trading graph.
 
-    Pre-fetches news + StockTwits + Reddit data, injects them into the
-    prompt as structured blocks, and produces a deterministic sentiment
+    Pre-fetches news plus market-appropriate sentiment data, injects them into
+    the prompt as structured blocks, and produces a deterministic sentiment
     report via structured output (with a free-text fallback for providers
     that do not support it).
     """
@@ -66,18 +71,24 @@ def create_sentiment_analyst(llm):
         # Pre-fetch all three sources. Each fetcher degrades gracefully and
         # returns a string (no exceptions surface from here), so the LLM
         # always sees something — either real data or a clear placeholder.
-        news_block = get_news.func(ticker, start_date, end_date)
-        stocktwits_block = fetch_stocktwits_messages(ticker, limit=30)
-        reddit_block = fetch_reddit_posts(ticker)
-
-        system_message = _build_system_message(
-            ticker=ticker,
-            start_date=start_date,
-            end_date=end_date,
-            news_block=news_block,
-            stocktwits_block=stocktwits_block,
-            reddit_block=reddit_block,
-        )
+        sources = _prefetch_sentiment_sources(ticker, start_date, end_date)
+        if sources["mode"] == "a_share":
+            system_message = _build_a_share_system_message(
+                ticker=ticker,
+                start_date=start_date,
+                end_date=end_date,
+                news_block=sources["news"],
+                local_market_block=sources["local_market"],
+            )
+        else:
+            system_message = _build_system_message(
+                ticker=ticker,
+                start_date=start_date,
+                end_date=end_date,
+                news_block=sources["news"],
+                stocktwits_block=sources["stocktwits"],
+                reddit_block=sources["reddit"],
+            )
 
         prompt = ChatPromptTemplate.from_messages(
             [
@@ -116,6 +127,51 @@ def create_sentiment_analyst(llm):
         }
 
     return sentiment_analyst_node
+
+
+def _prefetch_sentiment_sources(ticker: str, start_date: str, end_date: str) -> dict[str, str]:
+    news = get_news.func(ticker, start_date, end_date)
+    if is_a_share_symbol(ticker):
+        return {
+            "mode": "a_share",
+            "news": news,
+            "local_market": build_a_share_sentiment_snapshot(ticker, end_date),
+        }
+    return {
+        "mode": "global",
+        "news": news,
+        "stocktwits": fetch_stocktwits_messages(ticker, limit=30),
+        "reddit": fetch_reddit_posts(ticker),
+    }
+
+
+def _build_a_share_system_message(
+    *,
+    ticker: str,
+    start_date: str,
+    end_date: str,
+    news_block: str,
+    local_market_block: str,
+) -> str:
+    return f"""You are an A-share market sentiment analyst for {ticker}, covering {start_date} to {end_date}.
+
+Use only the pre-fetched China-market evidence below. Reddit and StockTwits are intentionally excluded because they are not representative A-share sources.
+
+### Official and financial news
+<start_of_news>
+{news_block}
+<end_of_news>
+
+### Deterministic A-share market breadth and popularity
+<start_of_local_market>
+{local_market_block}
+<end_of_local_market>
+
+Interpret limit-up/limit-down breadth, broken-board rate, streak height, and the deterministic sentiment phase. Distinguish whole-market risk appetite from ticker-specific news. Current-only sources must never be projected backward onto a historical date. If pools or popularity sources are unavailable, lower confidence explicitly. Sentiment is context, not proof of future price direction.
+
+Output the standard overall_band, overall_score, confidence, and narrative fields, with a markdown evidence table in the narrative.
+
+{get_language_instruction()}"""
 
 
 def _build_system_message(

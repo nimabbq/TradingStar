@@ -646,17 +646,20 @@ def _load_a_share_benchmark_frame(
     ticker: str,
     start_date: str,
     end_date: str,
+    benchmark: str | None = None,
 ) -> tuple[str, pd.DataFrame]:
-    """Load CSI 300 with a Sina-first chain that works on restricted networks."""
+    """Load an A-share benchmark with a Sina-first restricted-network chain."""
     ak = _akshare()
-    canonical = "000300.SS"
+    canonical = (benchmark or "000300.SS").upper()
+    code, suffix = canonical.split(".", 1)
+    market = {"SS": "sh", "SZ": "sz", "BJ": "bj"}.get(suffix, "sh")
     last_error: Exception | None = None
     candidates = (
-        ("stock_zh_index_daily", {"symbol": "sh000300"}),
+        ("stock_zh_index_daily", {"symbol": f"{market}{code}"}),
         (
             "index_zh_a_hist",
             {
-                "symbol": "000300",
+                "symbol": code,
                 "period": "daily",
                 "start_date": _yyyymmdd(start_date),
                 "end_date": _yyyymmdd(end_date),

@@ -19,6 +19,10 @@ from tradingagents.agents.utils.structured import (
     bind_structured,
     invoke_structured_or_freetext,
 )
+from tradingagents.agents.utils.rating import parse_rating
+from tradingagents.dataflows.a_share_execution import build_a_share_execution_plan
+from tradingagents.dataflows.a_share_rules import is_a_share_symbol
+from tradingagents.dataflows.config import get_config
 
 
 def create_portfolio_manager(llm):
@@ -70,6 +74,15 @@ Be decisive and ground every conclusion in specific evidence from the analysts.{
             render_pm_decision,
             "Portfolio Manager",
         )
+        ticker = state.get("company_of_interest", "")
+        if is_a_share_symbol(ticker):
+            execution = build_a_share_execution_plan(
+                ticker,
+                state["trade_date"],
+                parse_rating(final_trade_decision),
+                get_config(),
+            )
+            final_trade_decision += "\n\n" + execution
 
         new_risk_debate_state = {
             "judge_decision": final_trade_decision,

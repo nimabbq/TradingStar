@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
 import yfinance as yf
 from langgraph.prebuilt import ToolNode
 
@@ -241,11 +242,61 @@ class TradingAgentsGraph:
         unavailable (too recent, delisted, or network error).
         """
         from tradingagents.dataflows.symbol_utils import normalize_symbol
+        from tradingagents.dataflows.a_share_rules import is_a_share_symbol
 
         try:
             start = datetime.strptime(trade_date, "%Y-%m-%d")
             end = start + timedelta(days=holding_days + 7)  # buffer for weekends/holidays
             end_str = end.strftime("%Y-%m-%d")
+
+            if is_a_share_symbol(ticker):
+                from tradingagents.agents.utils.a_share_tools import (
+                    _load_a_share_benchmark_frame,
+                )
+                from tradingagents.dataflows.akshare import _stock_history_frame
+
+                end = start + timedelta(days=holding_days * 2 + 20)
+                end_str = end.strftime("%Y-%m-%d")
+                _, stock = _stock_history_frame(
+                    ticker,
+                    trade_date,
+                    end_str,
+                    adjust="qfq",
+                )
+                _, bench = _load_a_share_benchmark_frame(
+                    ticker,
+                    trade_date,
+                    end_str,
+                    benchmark=benchmark,
+                )
+                stock = stock.copy()
+                stock["Date"] = pd.to_datetime(stock["Date"], errors="coerce")
+                stock["Close"] = pd.to_numeric(stock["Close"], errors="coerce")
+                stock = stock.dropna(subset=["Date", "Close"]).sort_values("Date")
+                bench = bench.copy()
+                bench["date"] = pd.to_datetime(bench["date"], errors="coerce")
+                bench["close"] = pd.to_numeric(bench["close"], errors="coerce")
+                bench = bench.dropna(subset=["date", "close"]).sort_values("date")
+                common_entry_dates = sorted(set(stock["Date"]) & set(bench["date"]))
+                if not common_entry_dates:
+                    return None, None, None
+                entry_date = common_entry_dates[0]
+                benchmark_window = bench[bench["date"] >= entry_date].reset_index(drop=True)
+                if len(benchmark_window) <= holding_days:
+                    return None, None, None
+                target_date = benchmark_window.iloc[holding_days]["date"]
+                stock_entry = stock[stock["Date"] == entry_date].iloc[-1]
+                stock_target_rows = stock[stock["Date"] <= target_date]
+                if stock_target_rows.empty:
+                    return None, None, None
+                stock_target = stock_target_rows.iloc[-1]
+                raw = float(stock_target["Close"] / stock_entry["Close"] - 1)
+                bench_ret = float(
+                    benchmark_window.iloc[holding_days]["close"]
+                    / benchmark_window.iloc[0]["close"]
+                    - 1
+                )
+                return raw, raw - bench_ret, holding_days
 
             # Normalize so the realized-return lookup hits the same instrument
             # the analysis priced (e.g. XAUUSD -> GC=F) (#984). The benchmark is
@@ -290,7 +341,50 @@ class TradingAgentsGraph:
 
         benchmark = self._resolve_benchmark(ticker)
         updates = []
+        from tradingagents.dataflows.a_share_rules import is_a_share_symbol
+
         for entry in pending:
+            if is_a_share_symbol(ticker):
+                config = self.config if isinstance(self.config, dict) else {}
+                horizons = sorted({int(value) for value in config.get("reflection_horizons", [5, 20, 60])})
+                outcomes: dict[int, tuple[float, float]] = {}
+                complete = True
+                for horizon in horizons:
+                    raw, alpha, days = self._fetch_returns(
+                        ticker,
+                        entry["date"],
+                        holding_days=horizon,
+                        benchmark=benchmark,
+                    )
+                    if raw is None or alpha is None or days != horizon:
+                        complete = False
+                        break
+                    outcomes[horizon] = (raw, alpha)
+                if not complete:
+                    continue
+                reflection = self.reflector.reflect_on_multi_horizon_decision(
+                    final_decision=entry.get("decision", ""),
+                    outcomes=outcomes,
+                    benchmark_name=benchmark,
+                )
+                horizon_lines = ["MULTI_HORIZON_OUTCOMES:"]
+                for horizon in horizons:
+                    horizon_raw, horizon_alpha = outcomes[horizon]
+                    horizon_lines.append(
+                        f"- {horizon}d | raw {horizon_raw:+.1%} | alpha {horizon_alpha:+.1%}"
+                    )
+                reflection = "\n".join(horizon_lines) + "\n\nLESSON:\n" + reflection
+                longest = horizons[-1]
+                raw, alpha = outcomes[longest]
+                updates.append({
+                    "ticker": ticker,
+                    "trade_date": entry["date"],
+                    "raw_return": raw,
+                    "alpha_return": alpha,
+                    "holding_days": longest,
+                    "reflection": reflection,
+                })
+                continue
             raw, alpha, days = self._fetch_returns(
                 ticker, entry["date"], benchmark=benchmark,
             )
