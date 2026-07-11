@@ -2,6 +2,7 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 from tradingagents.agents.utils.agent_utils import (
     get_a_share_tools_for_analyst,
+    get_china_macro_indicators,
     get_global_news,
     get_instrument_context_from_state,
     get_language_instruction,
@@ -26,11 +27,16 @@ def create_news_analyst(llm):
             get_prediction_markets,
         ]
         a_share_tools = get_a_share_tools_for_analyst("news", ticker)
+        if a_share_tools:
+            a_share_tools.append(get_china_macro_indicators)
         tools += a_share_tools
         a_share_guidance = (
             " For mainland China A-shares, also use the A-share specialty tools "
-            "for dragon-tiger list activity, northbound flow, and margin-financing "
-            "context when relevant."
+            "for structured official-announcement events, dragon-tiger list activity, "
+            "northbound flow, and margin-financing "
+            "context when relevant. Use get_china_macro_indicators for China-specific "
+            "liquidity, inflation, credit, PMI, LPR, and growth context instead of "
+            "substituting similarly named US FRED series."
             if a_share_tools
             else ""
         )

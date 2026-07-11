@@ -27,7 +27,8 @@ def create_market_analyst(llm):
         a_share_guidance = (
             " For mainland China A-shares, also use the A-share specialty tools "
             "to check limit-up/limit-down executability, margin financing, and "
-            "fund-flow context before making price-action claims."
+            "fund-flow context before making price-action claims. Use the relative "
+            "comparison tool to separate stock-specific strength from broad-index moves."
             if a_share_tools
             else ""
         )

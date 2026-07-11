@@ -36,6 +36,7 @@ from .akshare_etf import (
 from .a_share_rules import is_a_share_symbol
 from .china_fund_rules import is_china_fund_symbol
 from .china_etf_rules import is_china_etf_symbol
+from .china_macro import get_china_macro_data as get_akshare_china_macro_data
 from .config import get_config
 from .errors import (
     NoMarketDataError,
@@ -93,6 +94,7 @@ TOOLS_CATEGORIES = {
         "description": "Macroeconomic indicators (rates, inflation, labor, growth)",
         "tools": [
             "get_macro_indicators",
+            "get_china_macro_indicators",
         ]
     },
     "prediction_markets": {
@@ -104,6 +106,7 @@ TOOLS_CATEGORIES = {
 }
 
 VENDOR_LIST = [
+    "akshare_china_macro",
     "akshare_etf",
     "akshare_fund",
     "akshare",
@@ -185,6 +188,9 @@ VENDOR_METHODS = {
     # macro_data
     "get_macro_indicators": {
         "fred": get_fred_macro_data,
+    },
+    "get_china_macro_indicators": {
+        "akshare_china_macro": get_akshare_china_macro_data,
     },
     # prediction_markets
     "get_prediction_markets": {
@@ -295,6 +301,8 @@ def route_to_vendor(method: str, *args, **kwargs):
     category = get_category_for_method(method)
     config = get_config()
     vendor_config = get_vendor(category, method)
+    if method == "get_china_macro_indicators" and method not in config.get("tool_vendors", {}):
+        vendor_config = config.get("china_macro_data_vendor", "akshare_china_macro")
     if _should_use_china_fund_vendor_config(config, category, method, args, kwargs):
         vendor_config = config.get("china_fund_data_vendors", {}).get(category, vendor_config)
     elif _should_use_china_etf_vendor_config(config, category, method, args, kwargs):

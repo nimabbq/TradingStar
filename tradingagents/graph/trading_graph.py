@@ -24,6 +24,7 @@ from tradingagents.agents.utils.agent_utils import (
     get_indicators,
     get_insider_transactions,
     get_macro_indicators,
+    get_china_macro_indicators,
     get_news,
     get_prediction_markets,
     get_stock_data,
@@ -190,6 +191,7 @@ class TradingAgentsGraph:
                     get_global_news,
                     get_insider_transactions,
                     get_macro_indicators,
+                    get_china_macro_indicators,
                     get_prediction_markets,
                     *NEWS_A_SHARE_TOOLS,
                 ]

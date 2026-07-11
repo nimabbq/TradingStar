@@ -5,8 +5,10 @@ import pytest
 
 from tradingagents.agents.utils.a_share_tools import (
     get_a_share_announcements,
+    get_a_share_announcement_events,
     get_a_share_dragon_tiger,
     get_a_share_limit_pool,
+    get_a_share_relative_comparison,
     get_a_share_shareholder_count,
     get_a_share_trade_status,
     get_a_share_tools_for_analyst,
@@ -161,6 +163,90 @@ def test_official_announcements_are_ticker_and_date_filtered(fake_akshare):
 def test_market_bundle_includes_deterministic_trade_status():
     names = [tool.name for tool in get_a_share_tools_for_analyst("market", "600519")]
     assert get_a_share_trade_status.name in names
+    assert get_a_share_relative_comparison.name in names
+
+
+@pytest.mark.unit
+def test_announcement_events_are_deterministically_classified(fake_akshare):
+    result = get_a_share_announcement_events.func("600519", "2026-01-01", "2026-01-05")
+
+    assert "Category | earnings" in result
+    assert "Risk | medium" in result
+    assert "年度业绩预告" in result
+
+
+@pytest.mark.unit
+def test_relative_comparison_calculates_stock_and_benchmark_returns(monkeypatch):
+    from tradingagents.agents.utils import a_share_tools
+
+    stock = pd.DataFrame(
+        {
+            "Date": pd.to_datetime(["2026-01-02", "2026-01-30"]),
+            "Close": [100.0, 110.0],
+            "Open": [100.0, 110.0],
+            "High": [100.0, 110.0],
+            "Low": [100.0, 110.0],
+            "Volume": [1000, 1200],
+        }
+    )
+    index = pd.DataFrame(
+        {
+            "date": pd.to_datetime(["2026-01-02", "2026-01-30"]),
+            "close": [4000.0, 4200.0],
+        }
+    )
+    monkeypatch.setattr(
+        a_share_tools,
+        "_stock_history_frame",
+        lambda *args, **kwargs: ("600519.SS", stock),
+    )
+    monkeypatch.setattr(
+        a_share_tools,
+        "_load_a_share_benchmark_frame",
+        lambda *args, **kwargs: ("000300.SS", index),
+    )
+    monkeypatch.setattr(
+        a_share_tools,
+        "_resolve_industry_snapshot",
+        lambda *args, **kwargs: {"industry": "食品制造业", "industry_pe": 25.0, "stock_pe": 30.0},
+    )
+
+    result = get_a_share_relative_comparison.func("600519", "2026-01-30", 30)
+
+    assert "Stock return: +10.00%" in result
+    assert "Benchmark return: +5.00%" in result
+    assert "Excess return: +5.00%" in result
+    assert "Industry PE: 25.0" in result
+
+
+@pytest.mark.unit
+def test_industry_snapshot_matches_cninfo_code_and_weighted_pe(monkeypatch):
+    from tradingagents.agents.utils.a_share_tools import _resolve_industry_snapshot
+
+    class IndustryData:
+        def stock_industry_change_cninfo(self, symbol, start_date, end_date):
+            return pd.DataFrame(
+                [{"行业大类": "酒、饮料和精制茶制造业", "行业编码": "C15"}]
+            )
+
+        def stock_industry_pe_ratio_cninfo(self, symbol, date):
+            return pd.DataFrame(
+                [
+                    {
+                        "行业编码": "C15",
+                        "行业名称": "酒、饮料和精制茶制造业",
+                        "静态市盈率-加权平均": 19.08,
+                    }
+                ]
+            )
+
+    monkeypatch.setitem(sys.modules, "akshare", IndustryData())
+
+    snapshot = _resolve_industry_snapshot("600519", "2025-06-30")
+
+    assert snapshot["industry"] == "酒、饮料和精制茶制造业"
+    assert snapshot["industry_pe"] == 19.08
+    assert snapshot["valuation_source"].endswith("20250630")
 
 
 @pytest.mark.unit

@@ -12,6 +12,7 @@ from tradingagents.agents.utils.a_share_tools import (
     MARKET_A_SHARE_TOOLS,
     NEWS_A_SHARE_TOOLS,
     get_a_share_announcements,
+    get_a_share_announcement_events,
     get_a_share_dividend_allotment,
     get_a_share_dragon_tiger,
     get_a_share_institutional_holdings,
@@ -20,6 +21,7 @@ from tradingagents.agents.utils.a_share_tools import (
     get_a_share_margin_financing,
     get_a_share_northbound_flow,
     get_a_share_sector_fund_flow,
+    get_a_share_relative_comparison,
     get_a_share_shareholder_count,
     get_a_share_trade_status,
     get_a_share_tools_for_analyst,
@@ -31,7 +33,10 @@ from tradingagents.agents.utils.fundamental_data_tools import (
     get_fundamentals,
     get_income_statement,
 )
-from tradingagents.agents.utils.macro_data_tools import get_macro_indicators
+from tradingagents.agents.utils.macro_data_tools import (
+    get_china_macro_indicators,
+    get_macro_indicators,
+)
 from tradingagents.agents.utils.market_data_validation_tools import get_verified_market_snapshot
 from tradingagents.agents.utils.news_data_tools import (
     get_global_news,
@@ -54,10 +59,13 @@ __all__ = [
     "get_global_news",
     "get_insider_transactions",
     "get_macro_indicators",
+    "get_china_macro_indicators",
     "get_prediction_markets",
     "get_verified_market_snapshot",
     "get_a_share_dragon_tiger",
     "get_a_share_announcements",
+    "get_a_share_announcement_events",
+    "get_a_share_relative_comparison",
     "get_a_share_trade_status",
     "get_a_share_northbound_flow",
     "get_a_share_margin_financing",

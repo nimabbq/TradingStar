@@ -34,3 +34,17 @@ def get_macro_indicators(
         str: A formatted markdown report of the macro series
     """
     return route_to_vendor("get_macro_indicators", indicator, curr_date, look_back_days)
+
+
+@tool
+def get_china_macro_indicators(
+    indicator: Annotated[
+        str,
+        "China macro indicator such as cpi, ppi, pmi, non_manufacturing_pmi, "
+        "lpr, m2, social_financing, new_credit, rrr, gdp, unemployment, or fx_reserves.",
+    ],
+    curr_date: Annotated[str, "Analysis date in yyyy-mm-dd format"],
+    look_back_days: Annotated[int | None, "Trailing window in days"] = None,
+) -> str:
+    """Retrieve a point-in-time China macroeconomic series through AkShare."""
+    return route_to_vendor("get_china_macro_indicators", indicator, curr_date, look_back_days)

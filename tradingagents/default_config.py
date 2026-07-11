@@ -159,6 +159,7 @@ DEFAULT_CONFIG = _apply_env_overrides({
         "fundamental_data": "akshare_etf",
         "news_data": "yfinance",
     },
+    "china_macro_data_vendor": "akshare_china_macro",
     # Tool-level configuration (takes precedence over category-level)
     "tool_vendors": {
         # Example: "get_stock_data": "alpha_vantage",  # Override category default

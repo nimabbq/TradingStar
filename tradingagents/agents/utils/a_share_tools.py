@@ -36,6 +36,14 @@ _DATE_COLUMNS = (
     "date",
 )
 
+_ANNOUNCEMENT_TITLE_COLUMNS = (
+    "\u516c\u544a\u6807\u9898",
+    "\u6807\u9898",
+    "NOTICE_TITLE",
+    "title",
+)
+_ANNOUNCEMENT_LINK_COLUMNS = ("\u516c\u544a\u94fe\u63a5", "\u7f51\u5740", "url", "URL")
+
 
 def _market_for(canonical: str) -> str:
     suffix = canonical.split(".", 1)[1]
@@ -158,6 +166,35 @@ def _run_specialty_tool(
         return f"DATA_UNAVAILABLE: could not retrieve A-share {title} data ({exc})."
 
 
+def _announcement_candidates(code: str, start_date: str, end_date: str):
+    return [
+        (
+            "stock_individual_notice_report",
+            [
+                {
+                    "security": code,
+                    "symbol": "\u5168\u90e8",
+                    "begin_date": _yyyymmdd(start_date),
+                    "end_date": _yyyymmdd(end_date),
+                }
+            ],
+        ),
+        (
+            "stock_zh_a_disclosure_report_cninfo",
+            [
+                {
+                    "symbol": code,
+                    "market": "\u6caa\u6df1\u4eac",
+                    "keyword": "",
+                    "category": "",
+                    "start_date": _yyyymmdd(start_date),
+                    "end_date": _yyyymmdd(end_date),
+                }
+            ],
+        ),
+    ]
+
+
 @tool
 def get_a_share_dragon_tiger(
     ticker: Annotated[str, "A-share ticker symbol, e.g. 600519"],
@@ -202,35 +239,85 @@ def get_a_share_announcements(
     return _run_specialty_tool(
         ticker,
         "official announcements",
-        [
-            (
-                "stock_individual_notice_report",
-                [
-                    {
-                        "security": code,
-                        "symbol": "\u5168\u90e8",
-                        "begin_date": _yyyymmdd(start_date),
-                        "end_date": _yyyymmdd(end_date),
-                    }
-                ],
-            ),
-            (
-                "stock_zh_a_disclosure_report_cninfo",
-                [
-                    {
-                        "symbol": code,
-                        "market": "\u6caa\u6df1\u4eac",
-                        "keyword": "",
-                        "category": "",
-                        "start_date": _yyyymmdd(start_date),
-                        "end_date": _yyyymmdd(end_date),
-                    }
-                ],
-            ),
-        ],
+        _announcement_candidates(code, start_date, end_date),
         start_date=start_date,
         end_date=end_date,
     )
+
+
+_ANNOUNCEMENT_RULES = (
+    ("regulatory", "negative", "high", ("\u7acb\u6848", "\u5904\u7f5a", "\u9000\u5e02", "\u98ce\u9669\u8b66\u793a", "\u95ee\u8be2\u51fd")),
+    ("earnings", "context-dependent", "medium", ("\u4e1a\u7ee9\u9884\u544a", "\u4e1a\u7ee9\u5feb\u62a5", "\u5e74\u5ea6\u62a5\u544a", "\u534a\u5e74\u5ea6\u62a5\u544a", "\u5b63\u5ea6\u62a5\u544a")),
+    ("shareholder_change", "context-dependent", "medium", ("\u589e\u6301", "\u51cf\u6301")),
+    ("repurchase", "positive", "medium", ("\u56de\u8d2d",)),
+    ("pledge", "risk-context", "medium", ("\u8d28\u62bc", "\u89e3\u9664\u8d28\u62bc")),
+    ("restructuring", "context-dependent", "high", ("\u5e76\u8d2d", "\u91cd\u7ec4", "\u91cd\u5927\u8d44\u4ea7")),
+    ("unlock", "supply-risk", "medium", ("\u89e3\u7981", "\u9650\u552e\u80a1")),
+    ("dividend", "positive", "low", ("\u5206\u7ea2", "\u6d3e\u606f", "\u6743\u76ca\u5206\u6d3e")),
+    ("major_contract", "context-dependent", "medium", ("\u91cd\u5927\u5408\u540c", "\u4e2d\u6807")),
+)
+
+
+def _classify_announcement(title: str) -> tuple[str, str, str]:
+    for category, direction, risk, keywords in _ANNOUNCEMENT_RULES:
+        if any(keyword in title for keyword in keywords):
+            return category, direction, risk
+    return "other", "unknown", "informational"
+
+
+@tool
+def get_a_share_announcement_events(
+    ticker: Annotated[str, "A-share ticker symbol, e.g. 600519"],
+    start_date: Annotated[str, "Start date in yyyy-mm-dd format"],
+    end_date: Annotated[str, "End date in yyyy-mm-dd format"],
+) -> str:
+    """Classify official announcements into deterministic event and risk labels."""
+    if not is_a_share_symbol(ticker):
+        return f"DATA_UNAVAILABLE: {ticker} is not a supported A-share symbol."
+    canonical, code = _canonical_and_code(ticker)
+
+    def prepare(frame: pd.DataFrame) -> pd.DataFrame:
+        return _filter_by_date_range(_filter_by_code(frame, code), start_date, end_date)
+
+    try:
+        frame, endpoint_name = _call_first_available(
+            _announcement_candidates(code, start_date, end_date),
+            "no official announcement events",
+            transform=prepare,
+        )
+    except Exception as exc:  # noqa: BLE001 - optional event context must degrade cleanly
+        return f"DATA_UNAVAILABLE: could not retrieve official announcement events ({exc})."
+
+    title_column = next((column for column in _ANNOUNCEMENT_TITLE_COLUMNS if column in frame.columns), None)
+    if title_column is None:
+        return "DATA_UNAVAILABLE: official announcement rows contain no recognized title column."
+    date_column = next((column for column in _DATE_COLUMNS if column in frame.columns), None)
+    link_column = next((column for column in _ANNOUNCEMENT_LINK_COLUMNS if column in frame.columns), None)
+    blocks = [
+        f"## Structured official announcement events for {canonical}",
+        f"- Source endpoint: {endpoint_name}",
+        f"- Window: {start_date} to {end_date}",
+        "- Labels are deterministic title-keyword classifications; financial impact is not inferred.",
+    ]
+    for number, (_, row) in enumerate(frame.iterrows(), start=1):
+        title = str(row.get(title_column, "")).strip()
+        category, direction, risk = _classify_announcement(title)
+        date = str(row.get(date_column, "unknown")) if date_column else "unknown"
+        link = str(row.get(link_column, "")) if link_column else ""
+        blocks.extend(
+            [
+                "",
+                f"### Event {number}",
+                f"- Date | {date}",
+                f"- Category | {category}",
+                f"- Direction | {direction}",
+                f"- Risk | {risk}",
+                f"- Title | {title}",
+            ]
+        )
+        if link:
+            blocks.append(f"- Source | {link}")
+    return "\n".join(blocks)
 
 
 @tool
@@ -555,19 +642,260 @@ def get_a_share_trade_status(
     )
 
 
+def _load_a_share_benchmark_frame(
+    ticker: str,
+    start_date: str,
+    end_date: str,
+) -> tuple[str, pd.DataFrame]:
+    """Load CSI 300 with a Sina-first chain that works on restricted networks."""
+    ak = _akshare()
+    canonical = "000300.SS"
+    last_error: Exception | None = None
+    candidates = (
+        ("stock_zh_index_daily", {"symbol": "sh000300"}),
+        (
+            "index_zh_a_hist",
+            {
+                "symbol": "000300",
+                "period": "daily",
+                "start_date": _yyyymmdd(start_date),
+                "end_date": _yyyymmdd(end_date),
+            },
+        ),
+    )
+    for endpoint_name, kwargs in candidates:
+        endpoint = getattr(ak, endpoint_name, None)
+        if endpoint is None:
+            continue
+        try:
+            frame = _as_frame(endpoint(**kwargs)).rename(
+                columns={
+                    "\u65e5\u671f": "date",
+                    "\u6536\u76d8": "close",
+                    "Date": "date",
+                    "Close": "close",
+                }
+            )
+            if "date" not in frame.columns or "close" not in frame.columns:
+                continue
+            frame["date"] = pd.to_datetime(frame["date"], errors="coerce")
+            frame["close"] = pd.to_numeric(frame["close"], errors="coerce")
+            start = pd.to_datetime(start_date)
+            end = pd.to_datetime(end_date)
+            frame = frame[
+                frame["date"].notna()
+                & frame["close"].notna()
+                & (frame["date"] >= start)
+                & (frame["date"] <= end)
+            ].sort_values("date")
+            if not frame.empty:
+                frame.attrs["source_endpoint"] = endpoint_name
+                return canonical, frame
+        except Exception as exc:  # noqa: BLE001 - continue to the next index source
+            last_error = exc
+    if last_error is not None:
+        raise last_error
+    raise NoMarketDataError(ticker, canonical, "no CSI 300 benchmark rows")
+
+
+def _first_numeric(mapping: dict[str, str], keys: tuple[str, ...]) -> float | None:
+    for key in keys:
+        if key not in mapping:
+            continue
+        value = pd.to_numeric(str(mapping[key]).replace(",", ""), errors="coerce")
+        if not pd.isna(value):
+            return float(value)
+    return None
+
+
+def _resolve_industry_snapshot(ticker: str, curr_date: str) -> dict[str, object]:
+    canonical, code = _canonical_and_code(ticker)
+    ak = _akshare()
+    profile: dict[str, str] = {}
+    profile_endpoint = getattr(ak, "stock_individual_info_em", None)
+    if profile_endpoint is not None:
+        try:
+            profile = _profile_values(_as_frame(profile_endpoint(symbol=code)))
+        except Exception:
+            profile = {}
+    industry = profile.get("\u884c\u4e1a") or profile.get("\u6240\u5c5e\u884c\u4e1a")
+    stock_pe = _first_numeric(
+        profile,
+        ("\u5e02\u76c8\u7387-\u52a8\u6001", "\u52a8\u6001\u5e02\u76c8\u7387", "\u5e02\u76c8\u7387"),
+    )
+
+    industry_code = None
+    endpoint = getattr(ak, "stock_industry_change_cninfo", None)
+    if endpoint is not None:
+        try:
+            history = _as_frame(
+                endpoint(
+                    symbol=code,
+                    start_date="19900101",
+                    end_date=_yyyymmdd(curr_date),
+                )
+            )
+            latest_classification = history.iloc[-1] if not history.empty else None
+            if latest_classification is not None:
+                for column in (
+                    "\u884c\u4e1a\u5927\u7c7b",
+                    "\u65b0\u884c\u4e1a\u540d\u79f0",
+                    "\u884c\u4e1a\u540d\u79f0",
+                    "\u884c\u4e1a\u95e8\u7c7b",
+                ):
+                    value = latest_classification.get(column)
+                    if value is not None and str(value).strip().lower() not in {"", "nan"}:
+                        industry = str(value).strip()
+                        break
+                code_value = latest_classification.get("\u884c\u4e1a\u7f16\u7801")
+                if code_value is not None and str(code_value).strip().lower() not in {"", "nan"}:
+                    industry_code = str(code_value).strip()
+        except Exception:
+            pass
+
+    industry_pe = None
+    valuation_source = None
+    endpoint = getattr(ak, "stock_industry_pe_ratio_cninfo", None)
+    if endpoint is not None and industry:
+        analysis_date = pd.to_datetime(curr_date)
+        for offset in range(0, 10):
+            try:
+                candidate_date = (analysis_date - timedelta(days=offset)).strftime("%Y%m%d")
+                valuation = _as_frame(
+                    endpoint(symbol="\u8bc1\u76d1\u4f1a\u884c\u4e1a\u5206\u7c7b", date=candidate_date)
+                )
+                if valuation.empty:
+                    continue
+                matched = pd.DataFrame()
+                if industry_code and "\u884c\u4e1a\u7f16\u7801" in valuation.columns:
+                    matched = valuation[
+                        valuation["\u884c\u4e1a\u7f16\u7801"].astype(str).str.strip()
+                        == industry_code
+                    ]
+                if matched.empty:
+                    for column in ("\u884c\u4e1a\u540d\u79f0", "\u884c\u4e1a\u5927\u7c7b", "\u884c\u4e1a\u5206\u7c7b"):
+                        if column not in valuation.columns:
+                            continue
+                        values = valuation[column].astype(str).str.strip()
+                        matched = valuation[
+                            values.str.contains(industry, regex=False)
+                            | values.map(lambda value: bool(value and value in industry))
+                        ]
+                        if not matched.empty:
+                            break
+                if matched.empty:
+                    continue
+                pe_column = next(
+                    (
+                        column
+                        for column in (
+                            "\u9759\u6001\u5e02\u76c8\u7387-\u52a0\u6743\u5e73\u5747",
+                            "\u5e02\u76c8\u7387-\u52a0\u6743\u5e73\u5747",
+                            "\u9759\u6001\u5e02\u76c8\u7387-\u4e2d\u4f4d\u6570",
+                        )
+                        if column in matched.columns
+                    ),
+                    None,
+                )
+                if pe_column is not None:
+                    value = pd.to_numeric(matched.iloc[0][pe_column], errors="coerce")
+                    if not pd.isna(value):
+                        industry_pe = float(value)
+                        valuation_source = f"stock_industry_pe_ratio_cninfo:{candidate_date}"
+                        break
+            except Exception:
+                continue
+    return {
+        "symbol": canonical,
+        "industry": industry or "unknown",
+        "stock_pe": stock_pe,
+        "industry_pe": industry_pe,
+        "valuation_source": valuation_source or "unavailable",
+    }
+
+
+@tool
+def get_a_share_relative_comparison(
+    ticker: Annotated[str, "A-share ticker symbol, e.g. 600519"],
+    curr_date: Annotated[str, "Analysis date in yyyy-mm-dd format"],
+    look_back_days: Annotated[int, "Relative-return window in calendar days"] = 60,
+) -> str:
+    """Compare an A-share with CSI 300 and its official industry valuation."""
+    if not is_a_share_symbol(ticker):
+        return f"DATA_UNAVAILABLE: {ticker} is not a supported A-share symbol."
+    end = pd.to_datetime(curr_date, errors="coerce")
+    if pd.isna(end):
+        return f"DATA_UNAVAILABLE: invalid analysis date {curr_date!r}."
+    start = end - timedelta(days=max(7, int(look_back_days)))
+    try:
+        canonical, stock = _stock_history_frame(
+            ticker,
+            start.strftime("%Y-%m-%d"),
+            curr_date,
+            adjust="qfq",
+        )
+        benchmark_name, benchmark = _load_a_share_benchmark_frame(
+            ticker,
+            start.strftime("%Y-%m-%d"),
+            curr_date,
+        )
+        stock = stock.copy()
+        stock["Date"] = pd.to_datetime(stock["Date"], errors="coerce")
+        stock["Close"] = pd.to_numeric(stock["Close"], errors="coerce")
+        stock = stock.dropna(subset=["Date", "Close"]).sort_values("Date")
+        benchmark = benchmark.copy()
+        benchmark["date"] = pd.to_datetime(benchmark["date"], errors="coerce")
+        benchmark["close"] = pd.to_numeric(benchmark["close"], errors="coerce")
+        benchmark = benchmark.dropna(subset=["date", "close"]).sort_values("date")
+        if len(stock) < 2 or len(benchmark) < 2:
+            raise NoMarketDataError(ticker, canonical, "fewer than two comparison rows")
+        stock_return = float(stock.iloc[-1]["Close"] / stock.iloc[0]["Close"] - 1)
+        benchmark_return = float(benchmark.iloc[-1]["close"] / benchmark.iloc[0]["close"] - 1)
+        snapshot = _resolve_industry_snapshot(ticker, curr_date)
+    except Exception as exc:  # noqa: BLE001 - enrichment must not crash the graph
+        return f"DATA_UNAVAILABLE: could not build A-share relative comparison ({exc})."
+
+    stock_pe = snapshot.get("stock_pe")
+    industry_pe = snapshot.get("industry_pe")
+    valuation_spread = (
+        "unknown"
+        if stock_pe is None or industry_pe in (None, 0)
+        else f"{(float(stock_pe) / float(industry_pe) - 1):+.2%}"
+    )
+    return "\n".join(
+        [
+            f"## A-share relative comparison for {canonical}",
+            f"- Window: {stock.iloc[0]['Date'].strftime('%Y-%m-%d')} to {stock.iloc[-1]['Date'].strftime('%Y-%m-%d')}",
+            "- Stock price basis: forward-adjusted (qfq)",
+            f"- Stock return: {stock_return:+.2%}",
+            f"- Benchmark: {benchmark_name}",
+            f"- Benchmark return: {benchmark_return:+.2%}",
+            f"- Excess return: {stock_return - benchmark_return:+.2%}",
+            f"- Industry: {snapshot.get('industry', 'unknown')}",
+            f"- Stock PE: {stock_pe if stock_pe is not None else 'unknown'}",
+            f"- Industry PE: {industry_pe if industry_pe is not None else 'unknown'}",
+            f"- PE premium/discount vs industry: {valuation_spread}",
+            f"- Industry valuation source: {snapshot.get('valuation_source', 'unavailable')}",
+        ]
+    )
+
+
 MARKET_A_SHARE_TOOLS = [
     get_a_share_trade_status,
+    get_a_share_relative_comparison,
     get_a_share_limit_pool,
     get_a_share_sector_fund_flow,
     get_a_share_margin_financing,
 ]
 NEWS_A_SHARE_TOOLS = [
     get_a_share_announcements,
+    get_a_share_announcement_events,
     get_a_share_dragon_tiger,
     get_a_share_northbound_flow,
     get_a_share_margin_financing,
 ]
 FUNDAMENTALS_A_SHARE_TOOLS = [
+    get_a_share_relative_comparison,
     get_a_share_shareholder_count,
     get_a_share_institutional_holdings,
     get_a_share_lockup_expiry,
@@ -589,7 +917,9 @@ def get_a_share_tools_for_analyst(analyst: str, ticker: str):
 
 ALL_A_SHARE_TOOLS = [
     get_a_share_trade_status,
+    get_a_share_relative_comparison,
     get_a_share_announcements,
+    get_a_share_announcement_events,
     get_a_share_dragon_tiger,
     get_a_share_northbound_flow,
     get_a_share_margin_financing,
@@ -609,6 +939,8 @@ __all__ = [
     "get_a_share_tools_for_analyst",
     "get_a_share_dragon_tiger",
     "get_a_share_announcements",
+    "get_a_share_announcement_events",
+    "get_a_share_relative_comparison",
     "get_a_share_trade_status",
     "get_a_share_northbound_flow",
     "get_a_share_margin_financing",

@@ -28,7 +28,7 @@ def create_fundamentals_analyst(llm):
         a_share_guidance = (
             " For mainland China A-shares, also use the A-share specialty tools "
             "for shareholder-count trends, institutional holdings, lockup expiry, "
-            "and dividend/allotment context."
+            "dividend/allotment context, and stock-versus-industry valuation."
             if a_share_tools
             else ""
         )
